@@ -13,7 +13,7 @@ by AI into folders like **Me & selfies**, **Group photos**, **Nature**, **Food &
 
 ## Install
 
-Free for anyone. Pick one way:
+Free for personal use. Pick one way:
 
 **A. Let Claude do it.** Open the Claude desktop app, go to the **Code** tab (or use Claude Code),
 and paste:
@@ -158,4 +158,12 @@ to delete.
 
 ## License
 
-MIT
+Copyright 2026 brindavids. Free to use under the
+[PolyForm Noncommercial License 1.0.0](LICENSE):
+
+- ✅ Free for personal use — sort your own trips, share it with friends and family
+- ✅ Free for schools, charities and other non-profit organisations
+- ✅ You may change it for your own use
+- ❌ No selling it, and no using it in a paid product or service, without permission from brindavids
+
+Copies must keep the `LICENSE` file, including its `Required Notice` line.
