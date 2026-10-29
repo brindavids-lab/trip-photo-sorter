@@ -46,6 +46,8 @@ namespace TripSorter
     {
         const uint FOF_NOCONFIRMATION = 0x0010;
         const uint FOF_NOCONFIRMMKDIR = 0x0200;
+        const uint FOF_SILENT = 0x0004;
+        const uint FOF_NOERRORUI = 0x0400;
         static readonly Guid CLSID_FileOperation = new Guid("3ad05575-8857-4850-9277-11b85bdb8e09");
         static readonly Guid IID_IShellItem = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
 
@@ -87,16 +89,17 @@ namespace TripSorter
         }
 
         // (IFileOperation.SetProgressMessage is documented as not implemented, so no custom title.)
+        // Silent operations show no Windows dialogs at all: the sorter page shows progress, and
+        // an error dialog would block the page's local server. Failures are found by checking files.
         static IFileOperation NewOperation(uint flags)
         {
             var op = (IFileOperation)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_FileOperation));
-            op.SetOperationFlags(flags);
+            op.SetOperationFlags(flags | FOF_SILENT | FOF_NOERRORUI);
             return op;
         }
 
         // Copies each source (a Shell.Application FolderItem on the phone) into the matching
-        // destination folder (a normal path that already exists).
-        // Shows the Windows progress dialog. Returns false if the user cancelled.
+        // destination folder (a normal path that already exists). Returns false if aborted.
         public static bool Copy(object[] sources, string[] destFolders)
         {
             var op = NewOperation(FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR);

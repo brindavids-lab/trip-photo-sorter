@@ -1,5 +1,6 @@
-// Trip Photo Sorter - runs CLIP (an image/text AI model) in the browser to put each
-// photo and video into a category, then asks SortTrip.ps1 to move the files.
+// Trip Photo Sorter - the whole app runs on this page: find the phone, pick the trip dates,
+// copy, sort with CLIP (an image/text AI model running in the browser), review, and
+// optionally delete from the phone. SortTrip.ps1 does the file work behind /api/*.
 // Photos never leave the laptop: only the model files are downloaded (once, then cached).
 import {
   AutoProcessor, AutoTokenizer, CLIPVisionModelWithProjection, CLIPTextModelWithProjection, RawImage, env,
@@ -8,31 +9,83 @@ import {
 env.allowLocalModels = false;
 
 const $ = (selector) => document.querySelector(selector);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DUPLICATE_WINDOW = 12;        // compare each photo with the previous N (bursts sit next to each other)
+const PILE_SIZE = 140;              // real thumbnails shown in "a total mess"
 const THUMB = 128;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const FOLDER_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2h9A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>';
 const TRASH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
 
 const state = {
+  stage: 'setup',
+  phone: null,          // { name, ready }
   session: null,
   settings: null,
   items: [],            // { file, thumb, folder, embedding }
   folders: new Map(),   // folder path -> { label, kind, card }
+  pileTiles: new Map(), // file id -> tile element
+  spareTiles: [],
   sorted: 0,
   finished: false,
+  closed: false,
 };
 
-// ------------------------------------------------------------------ helpers
+// ------------------------------------------------------------------ talking to SortTrip.ps1
 
-const fetchJson = async (url, options) => {
-  const res = await fetch(url, options);
-  if (!res.ok) throw new Error(`${url}: ${res.status} ${await res.text()}`);
+async function getJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
-};
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body ?? {}) });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+// Long jobs answer with one JSON object per line as they go.
+async function* stream(url, body) {
+  const res = await fetch(url, { method: 'POST', body: JSON.stringify(body ?? {}) });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline;
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) yield JSON.parse(line);
+    }
+  }
+  if (buffer.trim()) yield JSON.parse(buffer);
+}
+
+// ------------------------------------------------------------------ small helpers
+
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const setStatus = (html) => { $('#status').innerHTML = html; };
-const setBar = (fraction) => { $('#bar').style.width = `${Math.round(fraction * 100)}%`; };
+const setBar = (fraction) => { $('#bar').style.width = `${Math.round(Math.min(1, fraction) * 100)}%`; };
+const pad = (n) => String(n).padStart(2, '0');
+const isoDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseDay = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const plural = (n, one, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+function formatBytes(bytes) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
+}
+
+function formatDuration(seconds) {
+  if (seconds < 60) return 'less than a minute';
+  const minutes = Math.round(seconds / 60);
+  return minutes === 1 ? 'about 1 minute' : `about ${minutes} minutes`;
+}
 
 function normalize(vec) {
   let sum = 0;
@@ -48,20 +101,141 @@ function rows(tensor) {
   return Array.from({ length: count }, (_, i) => normalize(Array.from(tensor.data.subarray(i * dim, (i + 1) * dim))));
 }
 
-function formatDuration(seconds) {
-  if (seconds < 60) return 'less than a minute';
-  const minutes = Math.round(seconds / 60);
-  return minutes === 1 ? 'about 1 minute' : `about ${minutes} minutes`;
+function setTitle(lead, name, tail = 'photos') {
+  $('#titleLead').textContent = lead;
+  $('#tripName').textContent = name;
+  $('#titleTail').textContent = tail;
 }
 
-// ------------------------------------------------------------------ folders and cards
+function showSetupPanel(name) {
+  for (const id of ['setupForm', 'scanPanel', 'foundPanel']) $(`#${id}`).hidden = id !== name;
+}
+
+function showBoard() {
+  $('#setupView').hidden = true;
+  $('#board').hidden = false;
+  $('#stats').hidden = false;
+}
+
+// ------------------------------------------------------------------ 1. start screen
+
+function defaultTripName() {
+  const from = parseDay($('#fromDate').value);
+  const until = parseDay($('#untilDate').value);
+  const month = (d) => d.toLocaleDateString(undefined, { month: 'short' });
+  if (isNaN(from) || isNaN(until)) return `Trip ${isoDay(new Date())}`;
+  if (isoDay(from) === isoDay(until)) return `Trip ${from.getDate()} ${month(from)} ${from.getFullYear()}`;
+  const start = from.getMonth() === until.getMonth() ? `${from.getDate()}` : `${from.getDate()} ${month(from)}`;
+  return `Trip ${start}–${until.getDate()} ${month(until)} ${until.getFullYear()}`;
+}
+
+function setRange(days) {
+  const until = new Date();
+  const from = new Date();
+  from.setDate(until.getDate() - (days - 1));
+  $('#fromDate').value = isoDay(from);
+  $('#untilDate').value = isoDay(until);
+  for (const chip of document.querySelectorAll('#rangeChips button')) chip.classList.toggle('on', Number(chip.dataset.days) === days);
+  $('#tripInput').placeholder = defaultTripName();
+}
+
+function updatePhone(phone) {
+  state.phone = phone;
+  const chip = $('#phoneChip');
+  if (phone?.ready) {
+    chip.dataset.state = 'ready';
+    $('#phoneText').textContent = `${phone.name} connected`;
+  } else if (phone) {
+    chip.dataset.state = 'locked';
+    $('#phoneText').textContent = `Unlock your ${phone.name.replace(/^Apple /, '')} and tap “Trust”`;
+  } else {
+    chip.dataset.state = 'none';
+    $('#phoneText').textContent = 'Plug in your phone with a cable';
+  }
+  $('#findBtn').disabled = !phone?.ready;
+  $('#findBtn').textContent = phone?.ready ? 'Find my trip photos' : 'Waiting for your phone…';
+}
+
+async function watchPhone() {
+  while (!state.closed && ['setup', 'found'].includes(state.stage)) {
+    try {
+      const status = await getJson('/api/status');
+      if (!['setup', 'found'].includes(state.stage)) break;
+      updatePhone(status.phone);
+      $('#saveNote').textContent = `Saved to ${status.tripsRoot} — your photos never leave this laptop.`;
+    } catch { /* server busy or restarting */ }
+    await sleep(2500);
+  }
+}
+
+async function scan(body) {
+  state.stage = 'scanning';
+  showSetupPanel('scanPanel');
+  $('#scanText').textContent = body.mode === 'folder' ? 'Looking through the folder…' : `Looking through your ${state.phone?.name ?? 'phone'}…`;
+  try {
+    for await (const msg of stream('/api/scan', body)) {
+      if (msg.type === 'progress' && msg.found) $('#scanText').textContent = `Found ${plural(msg.found, 'photo or video', 'photos and videos')} so far…`;
+      if (msg.type === 'error') throw new Error(msg.message);
+      if (msg.type === 'done') showFound(msg, body.mode);
+    }
+  } catch (err) {
+    state.stage = 'setup';
+    showSetupPanel('setupForm');
+    $('#phoneText').textContent = err.message;
+    watchPhone();
+  }
+}
+
+function showFound(summary, mode) {
+  state.stage = 'found';
+  showSetupPanel('foundPanel');
+  $('#foundWhere').textContent = mode === 'folder' ? 'Found in that folder' : `Found on your ${state.phone?.name ?? 'phone'}`;
+  $('#foundPhotos').textContent = summary.photos.toLocaleString();
+  $('#foundVideos').textContent = summary.videos.toLocaleString();
+  const meta = [formatBytes(summary.bytes || 0)];
+  if (summary.skipped) meta.push(`${plural(summary.skipped, 'file')} you already copied are skipped`);
+  $('#foundMeta').textContent = summary.total ? meta.join(' · ') : 'Nothing found for those dates. Try other dates.';
+
+  const days = summary.days.length <= 31 ? summary.days : [];
+  const max = Math.max(1, ...days.map((d) => d.count));
+  $('#dayBars').innerHTML = days.map((d) => {
+    const date = parseDay(d.date);
+    return `<div class="day" title="${date.toDateString()}: ${d.count}"><span class="n">${d.count}</span><span class="col" style="height:${Math.round((d.count / max) * 56)}px"></span><span class="d">${date.getDate()}</span></div>`;
+  }).join('');
+  $('#dayBars').hidden = !days.length;
+  $('#copyBtn').disabled = !summary.total;
+  $('#copyBtn').textContent = summary.total ? `Copy ${plural(summary.total, 'file')} to my laptop & sort` : 'Nothing to copy';
+  watchPhone();
+}
+
+async function copyAndSort() {
+  const trip = $('#tripInput').value.trim() || defaultTripName();
+  state.stage = 'copying';
+  setTitle('Sorting my', trip);
+  showBoard();
+  setStatus('Copying your photos to the laptop…');
+  try {
+    for await (const msg of stream('/api/copy', { trip })) {
+      if (msg.type === 'progress') {
+        setBar(msg.done / msg.total);
+        setStatus(`Copying ${msg.done.toLocaleString()} of ${msg.total.toLocaleString()} to your laptop…`);
+      }
+      if (msg.type === 'done' && msg.failed) console.warn(`${msg.failed} files could not be copied`);
+    }
+    await startSorting();
+  } catch (err) {
+    setStatus(`Copying stopped: ${escapeHtml(err.message)}<br>Nothing was deleted anywhere.`);
+  }
+}
+
+// ------------------------------------------------------------------ 2. folders, cards and the pile
 
 function folderFor(kind, label) { return `${kind === 'video' ? 'Videos' : 'Photos'}/${label}`; }
 
 function addFolder(path, label, kind, container, extraClass = '') {
   const card = document.createElement('button');
   card.className = `card ${extraClass}`;
-  card.innerHTML = `<div class="card-head">${extraClass === 'trash' ? TRASH_ICON : FOLDER_ICON}<span class="name">${escapeHtml(label)}</span><span class="count">0</span></div><div class="strip"><span class="ph"></span></div>`;
+  card.innerHTML = `<div class="card-head">${extraClass === 'trash' ? TRASH_ICON : FOLDER_ICON}<span class="name">${escapeHtml(label)}</span><span class="count">0</span></div><div class="strip"><span class="ph"></span><span class="ph"></span><span class="ph"></span></div>`;
   card.addEventListener('click', () => openFolder(path));
   container.appendChild(card);
   state.folders.set(path, { label, kind, card });
@@ -70,14 +244,15 @@ function addFolder(path, label, kind, container, extraClass = '') {
 function buildFolders() {
   const { settings, session } = state;
   const labels = [...settings.categories.map((c) => c.folder), settings.otherFolder];
-  const hasVideos = session.files.some((f) => f.kind === 'video');
+  $('#photoCards').innerHTML = '';
   labels.forEach((label) => addFolder(folderFor('photo', label), label, 'photo', $('#photoCards')));
-  if (hasVideos) {
+  if (session.files.some((f) => f.kind === 'video')) {
     $('#videoCards').innerHTML = '';
     labels.forEach((label) => addFolder(folderFor('video', label), label, 'video', $('#videoCards')));
-    for (const { card } of [...state.folders.values()].filter((f) => f.kind === 'video')) card.hidden = true;
+    for (const f of state.folders.values()) if (f.kind === 'video') f.card.hidden = true;
   } else {
     $('#videoColumn').hidden = true;
+    $('#board').classList.add('no-videos');
   }
   addFolder(settings.duplicatesFolder, `${settings.duplicatesFolder.replace(/ - to trash$/i, '')} → trash`, 'any', $('#specialCards'), 'trash');
 }
@@ -88,51 +263,79 @@ function renderFolder(path) {
   const members = state.items.filter((it) => it.folder === path);
   folder.card.querySelector('.count').textContent = members.length;
   if (folder.kind === 'video') folder.card.hidden = members.length === 0;
-  const strip = folder.card.querySelector('.strip');
-  const shown = members.slice(-5).map((it) => `<img src="${it.thumb}" alt="">`).join('');
-  const more = members.length > 5 ? `<span class="more">+${members.length - 5}</span>` : '';
-  strip.innerHTML = shown ? shown + more : '<span class="ph"></span>';
+  const shown = members.slice(-6).map((it) => `<img src="${it.thumb}" alt="">`).join('');
+  const more = members.length > 6 ? `<span class="more">+${members.length - 6}</span>` : '';
+  folder.card.querySelector('.strip').innerHTML = shown ? shown + more : '<span class="ph"></span><span class="ph"></span><span class="ph"></span>';
 }
 
 function renderStats() {
   const counted = state.items.filter((it) => it.folder);
-  $('#statPhotos').textContent = counted.filter((it) => it.file.kind === 'photo').length;
-  $('#statVideos').textContent = counted.filter((it) => it.file.kind === 'video').length;
+  $('#statPhotos').textContent = counted.filter((it) => it.file.kind === 'photo').length.toLocaleString();
+  $('#statVideos').textContent = counted.filter((it) => it.file.kind === 'video').length.toLocaleString();
   $('#statFolders').textContent = new Set(counted.map((it) => it.folder)).size;
 }
 
-// ------------------------------------------------------------------ the pile ("a total mess")
-
-const TILE_COLORS = ['#e9c6d8', '#d8cbe8', '#c9dcea', '#f0d9c4', '#cfe3d3', '#e6d3dd', '#bfb3c6', '#a99aa9'];
-let tiles = [];
-
-function buildPile(count) {
-  const pile = $('#pile');
-  const size = pile.clientWidth || 300;
-  tiles = Array.from({ length: Math.min(count, 110) }, (_, i) => {
-    const tile = document.createElement('span');
-    tile.className = 'tile';
-    const angle = Math.random() * Math.PI * 2;
-    const radius = Math.sqrt(Math.random()) * (size / 2 - 22);
-    tile.style.left = `${size / 2 + Math.cos(angle) * radius - 17}px`;
-    tile.style.top = `${size / 2 + Math.sin(angle) * radius - 17}px`;
-    tile.style.transform = `rotate(${Math.random() * 50 - 25}deg)`;
-    tile.style.background = TILE_COLORS[i % TILE_COLORS.length];
-    pile.appendChild(tile);
-    return tile;
-  });
+function pilePosition(size) {
+  const angle = Math.random() * Math.PI * 2;
+  const radius = Math.sqrt(Math.random()) * (size / 2 - 26);
+  return [size / 2 + Math.cos(angle) * radius - 20, size / 2 + Math.sin(angle) * radius - 20];
 }
 
-function takeFromPile() {
+function addTile(src, fileId) {
+  const pile = $('#pile');
+  const [x, y] = pilePosition(pile.clientWidth || 360);
+  const tile = document.createElement(src ? 'img' : 'span');
+  tile.className = 'tile';
+  if (src) tile.src = src;
+  tile.style.left = `${x}px`;
+  tile.style.top = `${y}px`;
+  tile.style.rotate = `${Math.random() * 50 - 25}deg`;
+  tile.style.animationDelay = `${Math.random() * 0.25}s`;
+  pile.appendChild(tile);
+  if (fileId === undefined) state.spareTiles.push(tile); else state.pileTiles.set(fileId, tile);
+}
+
+// "A total mess": small real thumbnails of a sample of the trip, made while the AI loads.
+async function buildPile(files) {
+  const photos = files.filter((f) => f.kind === 'photo' && !['.heic', '.heif', '.dng'].includes(f.ext));
+  const step = Math.max(1, photos.length / PILE_SIZE);
+  for (let i = 0; i < photos.length && state.pileTiles.size < PILE_SIZE; i += step) {
+    const file = photos[Math.floor(i)];
+    try {
+      const blob = await (await fetch(`/media/${file.id}`)).blob();
+      const bitmap = await createImageBitmap(blob, { resizeWidth: 96, resizeQuality: 'low' });
+      const side = Math.min(bitmap.width, bitmap.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 80;
+      canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 80, 80);
+      bitmap.close();
+      addTile(canvas.toDataURL('image/jpeg', 0.7), file.id);
+    } catch { /* skip files the browser can't open */ }
+  }
+  // Videos and the rest of a big trip appear as plain tiles.
+  const extra = Math.min(files.length, PILE_SIZE + 40) - state.pileTiles.size;
+  for (let i = 0; i < extra; i++) addTile(null);
+}
+
+function takeFromPile(fileId) {
   const total = state.session.files.length;
-  const keep = Math.round(tiles.length * (1 - state.sorted / total));
   let start = null;
-  while (tiles.length > keep) {
-    const tile = tiles.splice(Math.floor(Math.random() * tiles.length), 1)[0];
+  const own = state.pileTiles.get(fileId);
+  if (own) {
+    start = own.getBoundingClientRect();
+    own.classList.add('gone');
+    state.pileTiles.delete(fileId);
+  }
+  // Keep the pile shrinking evenly even when this file had no tile of its own.
+  const left = state.pileTiles.size + state.spareTiles.length;
+  const keep = Math.round((PILE_SIZE + 40) * (1 - state.sorted / total));
+  if (left > keep && state.spareTiles.length) {
+    const tile = state.spareTiles.splice(Math.floor(Math.random() * state.spareTiles.length), 1)[0];
     start ??= tile.getBoundingClientRect();
     tile.classList.add('gone');
   }
-  $('#pileCaption').textContent = state.sorted < total ? `a total mess · ${total - state.sorted} left` : 'all sorted ✨';
+  $('#pileCaption').textContent = state.sorted < total ? `a total mess · ${(total - state.sorted).toLocaleString()} left` : 'all sorted ✨';
+  if (state.sorted >= total) for (const tile of $('#pile').children) tile.classList.add('gone');
   return start ?? $('#pile').getBoundingClientRect();
 }
 
@@ -144,11 +347,13 @@ function fly(item, fromRect) {
   img.src = item.thumb;
   img.className = 'flyer';
   document.body.appendChild(img);
-  const sx = fromRect.left + fromRect.width / 2 - 17, sy = fromRect.top + fromRect.height / 2 - 17;
+  const sx = fromRect.left + fromRect.width / 2 - 20, sy = fromRect.top + fromRect.height / 2 - 20;
+  const mx = (sx + to.left) / 2, my = Math.min(sy, to.top) - 60;
   img.animate([
-    { transform: `translate(${sx}px, ${sy}px) rotate(${Math.random() * 40 - 20}deg) scale(1.3)` },
-    { transform: `translate(${to.left}px, ${to.top}px) rotate(0deg) scale(1)` },
-  ], { duration: 700, easing: 'cubic-bezier(.3,.7,.2,1)' }).finished.then(() => {
+    { transform: `translate(${sx}px, ${sy}px) rotate(${Math.random() * 40 - 20}deg) scale(1.2)` },
+    { transform: `translate(${mx}px, ${my}px) rotate(0deg) scale(1.35)`, offset: 0.45 },
+    { transform: `translate(${to.left}px, ${to.top}px) rotate(0deg) scale(0.8)` },
+  ], { duration: 800, easing: 'cubic-bezier(.35,.6,.25,1)' }).finished.then(() => {
     img.remove();
     renderFolder(item.folder);
     folder.card.classList.remove('pulse');
@@ -157,7 +362,7 @@ function fly(item, fromRect) {
   });
 }
 
-// ------------------------------------------------------------------ AI model
+// ------------------------------------------------------------------ 3. the AI model
 
 async function loadModel(modelId) {
   const loaded = new Map();
@@ -166,7 +371,7 @@ async function loadModel(modelId) {
     loaded.set(p.file, [p.loaded, p.total]);
     let have = 0, total = 0;
     for (const [l, t] of loaded.values()) { have += l; total += t; }
-    setStatus(`Downloading the AI model… ${Math.round((100 * have) / total)}% of ${Math.round(total / 1e6)} MB<br><span class="muted">First time only - after this it works from the browser cache.</span>`);
+    setStatus(`Downloading the AI… ${Math.round((100 * have) / total)}% of ${Math.round(total / 1e6)} MB<br><span class="muted small">First time only — after this it's ready instantly.</span>`);
     setBar(have / total);
   };
 
@@ -274,12 +479,12 @@ const BROKEN_THUMB = (() => {
   const c = document.createElement('canvas');
   c.width = c.height = THUMB;
   const g = c.getContext('2d');
-  g.fillStyle = '#eadbe4'; g.fillRect(0, 0, THUMB, THUMB);
-  g.fillStyle = '#8b7f8d'; g.font = '600 18px sans-serif'; g.textAlign = 'center'; g.fillText('?', THUMB / 2, THUMB / 2 + 6);
+  g.fillStyle = '#dce6f3'; g.fillRect(0, 0, THUMB, THUMB);
+  g.fillStyle = '#74819a'; g.font = '600 18px sans-serif'; g.textAlign = 'center'; g.fillText('?', THUMB / 2, THUMB / 2 + 6);
   return c.toDataURL();
 })();
 
-// ------------------------------------------------------------------ sorting one file
+// ------------------------------------------------------------------ 4. sorting one file
 
 async function sortFile(ai, categoryVectors, file, seenHashes, recent) {
   const { settings } = state;
@@ -332,7 +537,44 @@ async function sortFile(ai, categoryVectors, file, seenHashes, recent) {
   return item;
 }
 
-// ------------------------------------------------------------------ review dialog
+async function startSorting() {
+  state.stage = 'sorting';
+  const [session, settings] = await Promise.all([getJson('/api/session'), getJson('/settings.json')]);
+  Object.assign(state, { session, settings });
+  setTitle('Sorting my', session.trip);
+  document.title = `Sorting ${session.trip}`;
+  showBoard();
+  $('#statTotal').textContent = session.files.length.toLocaleString();
+  buildFolders();
+  setBar(0);
+  setStatus('Waking up the AI…');
+
+  const [ai] = await Promise.all([loadModel(settings.aiModel), buildPile(session.files)]);
+  const categoryVectors = await embedCategories(ai, settings.categories);
+  $('#loader').classList.add('off');
+
+  const seenHashes = new Set();
+  const recent = [];
+  const started = performance.now();
+  for (const file of session.files) {
+    const item = await sortFile(ai, categoryVectors, file, seenHashes, recent);
+    state.items.push(item);
+    state.sorted++;
+    fly(item, takeFromPile(file.id));
+    renderStats();
+    const perFile = (performance.now() - started) / 1000 / state.sorted;
+    setBar(state.sorted / session.files.length);
+    setStatus(`Sorting ${state.sorted.toLocaleString()} of ${session.files.length.toLocaleString()} · ${formatDuration(perFile * (session.files.length - state.sorted))} left<br><span class="muted small">AI on the ${ai.device === 'webgpu' ? 'graphics chip' : 'processor'} · photos stay on this laptop</span>`);
+  }
+
+  state.finished = true;
+  state.stage = 'review';
+  for (const path of state.folders.keys()) renderFolder(path);
+  setStatus('All sorted! Click any folder to check it and fix mistakes.');
+  $('#applyBtn').hidden = false;
+}
+
+// ------------------------------------------------------------------ 5. review dialog
 
 function folderOptions(kind) {
   return [...state.folders.entries()].filter(([, f]) => f.kind === kind || f.kind === 'any');
@@ -349,7 +591,7 @@ function openFolder(path) {
     const fig = document.createElement('figure');
     const options = folderOptions(item.file.kind)
       .map(([p, f]) => `<option value="${escapeHtml(p)}"${p === path ? ' selected' : ''}>${escapeHtml(f.label)}</option>`).join('');
-    fig.innerHTML = `<img src="${item.thumb}" alt=""><figcaption title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</figcaption><select aria-label="Folder for ${escapeHtml(item.file.name)}">${options}</select>`;
+    fig.innerHTML = `<img src="${item.thumb}" alt=""><figcaption title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</figcaption><select aria-label="Folder for ${escapeHtml(item.file.name)}" ${state.applied ? 'disabled' : ''}>${options}</select>`;
     fig.querySelector('select').addEventListener('change', (e) => {
       item.folder = e.target.value;
       fig.style.opacity = 0.35;
@@ -362,7 +604,7 @@ function openFolder(path) {
   $('#folderDialog').showModal();
 }
 
-// ------------------------------------------------------------------ finishing: move files and write the report
+// ------------------------------------------------------------------ 6. move files, report, free up the phone
 
 function reportHtml(css, result) {
   const { session, settings } = state;
@@ -372,25 +614,25 @@ function reportHtml(css, result) {
     const href = path.split('/').map(encodeURIComponent).join('/') + '/';
     const thumbs = members.slice(0, 8).map((it) => `<img src="${it.thumb}" alt="">`).join('');
     const more = members.length > 8 ? `<span class="more">+${members.length - 8}</span>` : '';
-    return `<a class="card${path === settings.duplicatesFolder ? ' trash' : ''}" href="${href}"><div class="card-head">${path === settings.duplicatesFolder ? TRASH_ICON : FOLDER_ICON}<span class="name">${escapeHtml(f.label)}</span><span class="count">${members.length}</span></div><div class="strip">${thumbs}${more}</div></a>`;
+    const trash = path === settings.duplicatesFolder;
+    return `<a class="card${trash ? ' trash' : ''}" href="${href}"><div class="card-head">${trash ? TRASH_ICON : FOLDER_ICON}<span class="name">${escapeHtml(f.label)}</span><span class="count">${members.length}</span></div><div class="strip">${thumbs}${more}</div></a>`;
   };
   const column = (kind) => [...state.folders.entries()].filter(([, f]) => f.kind === kind).map(([p, f]) => card(p, f)).join('');
-  const dup = state.folders.get(settings.duplicatesFolder);
   const photos = state.items.filter((it) => it.file.kind === 'photo').length;
   const videos = state.items.length - photos;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(session.trip)} - sorted photos</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
-<style>${css} a.card{display:block;text-decoration:none} .board{grid-template-columns:1fr 1fr}</style></head><body>
-<header class="top"><div class="brand"><div class="avatar">✿</div><div><div class="eyebrow">Trip Photo Sorter · <span class="muted">${new Date().toLocaleDateString()}</span></div>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>${css} .board{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}</style></head><body>
+<header class="top"><div class="brand"><div class="avatar">✓</div><div><div class="eyebrow"><b>Trip Photo Sorter</b> <span class="muted">· ${new Date().toLocaleDateString()}</span></div>
 <h1>Sorted my <em>${escapeHtml(session.trip)}</em> photos</h1></div></div>
 <div class="stats"><div class="stat"><span class="label">Total files</span><span class="value">${state.items.length}</span></div>
-<div class="stat"><span class="label"><i class="dot"></i>Photos</span><span class="value">${photos}</span></div>
 <div class="stat"><span class="label"><i class="dot video"></i>Videos</span><span class="value">${videos}</span></div>
+<div class="stat"><span class="label"><i class="dot"></i>Photos</span><span class="value">${photos}</span></div>
 <div class="stat"><span class="label">Folders created</span><span class="value">${result.folders}</span></div></div></header>
-<main class="board"><section><h2>Photos</h2><div class="cards">${column('photo')}</div></section>
-<section><h2>Videos</h2><div class="cards">${column('video') || '<p class="empty">No videos.</p>'}</div>
-<h2>Check, then delete</h2><div class="cards">${card(settings.duplicatesFolder, dup) || '<p class="empty">No duplicates found.</p>'}</div></section></main>
+<main class="board"><section><h2><i class="dot"></i>Photos</h2><div class="cards">${column('photo')}</div></section>
+<section><h2><i class="dot video"></i>Videos</h2><div class="cards">${column('video') || '<p class="empty">No videos.</p>'}</div>
+<h2>Check, then delete</h2><div class="cards">${card(settings.duplicatesFolder, state.folders.get(settings.duplicatesFolder)) || '<p class="empty">No duplicates found.</p>'}</div></section></main>
 </body></html>`;
 }
 
@@ -400,64 +642,121 @@ async function applySorting() {
   setStatus('Creating folders and moving files…');
   try {
     const assignments = state.items.map((it) => ({ id: it.file.id, folder: it.folder }));
-    const result = await fetchJson('/api/apply', { method: 'POST', body: JSON.stringify({ assignments }) });
+    const result = await postJson('/api/apply', { assignments });
     const css = await (await fetch('/style.css')).text();
-    await fetchJson('/api/report', { method: 'POST', body: reportHtml(css, result) });
-    await fetch('/api/finish', { method: 'POST' });
+    await postJson('/api/report', reportHtml(css, result));
+    state.applied = result;
+    state.stage = 'done';
+    setTitle('Sorted my', state.session.trip);
     button.hidden = true;
-    $('#hint').hidden = true;
-    setStatus(`✅ Moved <b>${result.moved}</b> files into <b>${result.folders}</b> folders.`);
-    const panel = document.createElement('div');
-    panel.className = 'done-panel';
-    const phoneStep = state.session.fromPhone
-      ? '<p><b>Next:</b> go back to the black <b>Trip Photo Sorter</b> window. It has checked every file and will ask whether to delete these photos from your phone.</p>'
-      : '';
-    panel.innerHTML = `<p>Your sorted trip is in<br><code>${escapeHtml(result.tripDir)}</code><br>with a <b>Sorting report.html</b> inside.</p>${result.leftover ? `<p>${result.leftover} files were left in <code>_incoming</code>.</p>` : ''}${phoneStep}<p class="muted">You can close this tab.</p>`;
-    $('.center').appendChild(panel);
+    setStatus(`✅ ${plural(result.moved, 'file')} sorted into ${plural(result.folders, 'folder')}.`);
+    showDonePanels(result);
   } catch (err) {
     setStatus(`Something went wrong while moving files: ${escapeHtml(err.message)}<br>Nothing on your phone was touched.`);
     button.disabled = false;
   }
 }
 
-// ------------------------------------------------------------------ main
+function showDonePanels(result) {
+  const actions = $('#actions');
+  actions.innerHTML = '';
+  const done = document.createElement('div');
+  done.className = 'panel ok';
+  done.innerHTML = `<h3>Your trip is on your laptop</h3><p><code>${escapeHtml(result.tripDir)}</code></p>
+    ${result.leftover ? `<p>${plural(result.leftover, 'file')} stayed in <code>_incoming</code>.</p>` : ''}
+    <div class="row"><button class="primary" id="openBtn">Open the folder</button></div>`;
+  actions.appendChild(done);
+  $('#openBtn').addEventListener('click', () => postJson('/api/open-folder'));
 
-async function main() {
-  const [session, settings] = await Promise.all([fetchJson('/api/session'), fetchJson('/settings.json')]);
-  Object.assign(state, { session, settings });
-  $('#tripName').textContent = session.trip;
-  document.title = `Sorting ${session.trip}`;
-  $('#statTotal').textContent = session.files.length;
-  buildFolders();
-  buildPile(session.files.length);
-
-  setStatus('Loading the AI model…');
-  const ai = await loadModel(settings.aiModel);
-  const categoryVectors = await embedCategories(ai, settings.categories);
-
-  const seenHashes = new Set();
-  const recent = [];
-  const started = performance.now();
-  for (const file of session.files) {
-    const item = await sortFile(ai, categoryVectors, file, seenHashes, recent);
-    state.items.push(item);
-    state.sorted++;
-    fly(item, takeFromPile());
-    renderStats();
-    const perFile = (performance.now() - started) / 1000 / state.sorted;
-    setBar(state.sorted / session.files.length);
-    setStatus(`Sorting ${state.sorted} of ${session.files.length} · ${formatDuration(perFile * (session.files.length - state.sorted))} left<br><span class="muted">AI on ${ai.device === 'webgpu' ? 'graphics chip' : 'processor'} · photos stay on this laptop</span>`);
+  const phone = state.session.phoneName ?? 'phone';
+  if (state.session.fromPhone && result.deletable > 0) {
+    const free = document.createElement('div');
+    free.className = 'panel';
+    free.id = 'freePanel';
+    free.innerHTML = `<h3>Free up space on your ${escapeHtml(phone.replace(/^Apple /, ''))}?</h3>
+      <p>All ${plural(result.deletable, 'file')} were checked: each one is on your laptop with exactly the same size.</p>
+      <div class="row"><button class="danger" id="deleteBtn">Delete them from my phone</button><button class="ghost-btn" id="keepBtn">Keep them</button></div>`;
+    actions.appendChild(free);
+    $('#deleteBtn').addEventListener('click', () => {
+      $('#deleteCount').textContent = result.deletable.toLocaleString();
+      $('#deletePhone').textContent = phone.replace(/^Apple /, '');
+      $('#deleteDialog').showModal();
+    });
+    $('#keepBtn').addEventListener('click', () => { free.innerHTML = '<p>OK — nothing was deleted from your phone.</p>'; });
   }
 
-  state.finished = true;
-  for (const path of state.folders.keys()) renderFolder(path);
-  setStatus('All sorted! Click a folder to check it, then press the button to create the folders on your laptop.');
-  $('#applyBtn').disabled = false;
+  const finish = document.createElement('button');
+  finish.className = 'ghost-btn';
+  finish.textContent = 'Done';
+  finish.addEventListener('click', closeApp);
+  actions.appendChild(finish);
 }
 
+async function deleteFromPhone() {
+  $('#deleteDialog').close();
+  const panel = $('#freePanel');
+  panel.innerHTML = '<h3>Deleting from your phone…</h3><p id="deleteProgress">Starting…</p><div class="progress"><div class="bar" id="deleteBar"></div></div>';
+  try {
+    for await (const msg of stream('/api/delete')) {
+      if (msg.type === 'progress') {
+        $('#deleteProgress').textContent = `Deleted ${msg.done.toLocaleString()} of ${msg.total.toLocaleString()}…`;
+        $('#deleteBar').style.width = `${Math.round((100 * msg.done) / msg.total)}%`;
+      }
+      if (msg.type === 'checking') $('#deleteProgress').textContent = 'Checking the phone…';
+      if (msg.type === 'done') {
+        const all = msg.deleted === msg.total;
+        panel.innerHTML = `<h3>${all ? '✨ Space freed up' : 'Some photos stayed on the phone'}</h3>
+          <p>Deleted ${msg.deleted.toLocaleString()} of ${msg.total.toLocaleString()} files from your phone.</p>
+          ${all ? '' : '<p class="muted">iPhones with iCloud Photos switched on don’t allow deleting over the cable. Delete them in the Photos app instead — they’re all safe on your laptop.</p>'}`;
+      }
+    }
+  } catch (err) {
+    panel.innerHTML = `<h3>Deleting stopped</h3><p>${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function closeApp() {
+  state.closed = true;
+  try { await postJson('/api/finish'); } catch { /* already closed */ }
+  $('#actions').innerHTML = '<div class="panel ok"><h3>All done ✨</h3><p>You can close this tab. Enjoy the memories!</p></div>';
+}
+
+// ------------------------------------------------------------------ wiring
+
+$('#rangeChips').addEventListener('click', (e) => { if (e.target.dataset.days) setRange(Number(e.target.dataset.days)); });
+for (const id of ['fromDate', 'untilDate']) {
+  $(`#${id}`).addEventListener('change', () => {
+    for (const chip of document.querySelectorAll('#rangeChips button')) chip.classList.remove('on');
+    $('#tripInput').placeholder = defaultTripName();
+  });
+}
+$('#findBtn').addEventListener('click', () => scan({
+  mode: 'phone', from: $('#fromDate').value, until: $('#untilDate').value, skipImported: $('#skipImported').checked,
+}));
+$('#folderBtn').addEventListener('click', async () => {
+  const { path } = await postJson('/api/pick-folder');
+  if (path) scan({ mode: 'folder', path });
+});
+$('#changeBtn').addEventListener('click', () => { state.stage = 'setup'; showSetupPanel('setupForm'); });
+$('#copyBtn').addEventListener('click', copyAndSort);
 $('#applyBtn').addEventListener('click', applySorting);
 $('#dialogClose').addEventListener('click', () => $('#folderDialog').close());
+$('#deleteCancel').addEventListener('click', () => $('#deleteDialog').close());
+$('#deleteConfirm').addEventListener('click', deleteFromPhone);
+
+// Tell the helper the page is still open (it quits by itself 30 minutes after it's closed).
+setInterval(() => { if (!state.closed) fetch('/api/ping').catch(() => {}); }, 20000);
+
+async function main() {
+  setRange(7);
+  const status = await getJson('/api/status');
+  if (status.hasSession && !status.applied) { await startSorting(); return; }
+  updatePhone(status.phone);
+  $('#saveNote').textContent = `Saved to ${status.tripsRoot} — your photos never leave this laptop.`;
+  watchPhone();
+}
+
 main().catch((err) => {
   console.error(err);
-  setStatus(`Could not start: ${escapeHtml(err.message)}<br>Check your internet connection (needed once to download the AI model) and reload this page.`);
+  setStatus(`Could not start: ${escapeHtml(err.message)}<br>Check your internet connection (needed once to download the AI) and reload this page.`);
 });

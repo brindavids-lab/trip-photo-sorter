@@ -9,7 +9,7 @@ whether to delete them from the phone.
 - **Private.** The AI runs inside your browser on your own laptop. Your photos are never uploaded.
   The only download is the AI model itself (about 150–250 MB, the first time only).
 - **Safe.** Nothing is deleted from the phone unless every file has been checked on the laptop
-  *and* you type `YES`. Duplicates go into a folder for you to check, not the bin.
+  *and* you confirm it. Duplicates go into a folder for you to check, not the bin.
 
 ## Install
 
@@ -41,17 +41,19 @@ To uninstall, run `install.ps1 -Uninstall`. Your photos are never touched.
    - **iPhone:** tap **Trust** when asked. Tip: in *Settings → Apps → Photos → Transfer to Mac or PC*
      choose **Automatic**, so photos arrive as normal JPGs that every browser can read.
    - **Android:** pull down the notification bar, tap the USB notification and pick **File transfer**.
-2. Double-click **Sort My Trip** on your Desktop (or ask Claude to start it) and follow the prompts in the black window:
-   - name the trip (for example `Bali 2026`)
-   - type the first and last day of the trip, or just press Enter to take every photo not imported before
-3. The photos are copied to `C:\Users\<you>\Trip Photos\<trip name>` and your browser opens the sorter.
-   Watch them fly out of the pile into folders.
-4. When it says **All sorted**, click any folder to check it. If the AI got one wrong, pick the
-   right folder under that photo.
-5. Press **Create folders & move files**.
-6. Go back to the black window. It checks that every file is safely on the laptop, then asks:
-   *Do you want to DELETE these files from your phone?* Type `YES` to free up space, or just
-   press Enter to keep them.
+2. Double-click **Sort My Trip** on your Desktop (or ask Claude to start it). The sorter opens in
+   your browser and shows a green dot when it sees your phone.
+3. Give the trip a name and pick the **first and last day** with the date pickers (or tap
+   *Last week*, *Last 2 weeks*, ...). Press **Find my trip photos**.
+4. Check what it found — photos and videos per day — and press **Copy to my laptop & sort**.
+5. Watch the photos fly out of the pile into folders. When it says **All sorted**, click any
+   folder to check it; if the AI got one wrong, pick the right folder under that photo.
+6. Press **Create the folders on my laptop**.
+7. Optional: press **Delete them from my phone** to free up space. It only offers this after
+   checking every file on the laptop, and asks you to confirm first. Then press **Done**.
+
+There is no black window to type into: the small helper runs minimized in the taskbar and closes
+itself when you press **Done**.
 
 You end up with:
 
@@ -73,13 +75,8 @@ Trip Photos\
 
 ### Sort a folder instead of a phone
 
-If your photos are already on the laptop (an SD card, a Google Photos export, ...), choose
-**F** when no phone is found and pick the folder, or run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\SortTrip.ps1 -Source "D:\DCIM"
-```
-
+If your photos are already on the laptop (an SD card, a Google Photos export, ...), click
+**or sort a folder that's already on this laptop** on the start screen and pick the folder.
 The original folder is copied, never changed.
 
 ## The folders

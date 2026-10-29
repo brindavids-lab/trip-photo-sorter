@@ -6,44 +6,100 @@
   <title>Trip Photo Sorter</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="top">
     <div class="brand">
-      <div class="avatar" aria-hidden="true">✿</div>
+      <div class="avatar" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.2-2h6.6L16.5 7h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="13" r="3.4"/></svg>
+      </div>
       <div>
-        <div class="eyebrow">Trip Photo Sorter · <span class="muted">AI runs on this laptop</span></div>
-        <h1>Sorting my <em id="tripName">trip</em> photos</h1>
+        <div class="eyebrow"><b>Trip Photo Sorter</b> <span class="muted">· AI sorting on this laptop</span></div>
+        <h1><span id="titleLead">Sort my</span> <em id="tripName">trip</em> <span id="titleTail">photos</span></h1>
       </div>
     </div>
-    <div class="stats">
-      <div class="stat"><span class="label">Total files</span><span class="value" id="statTotal">–</span></div>
-      <div class="stat"><span class="label"><i class="dot"></i>Photos</span><span class="value" id="statPhotos">0</span></div>
+    <div class="stats" id="stats" hidden>
+      <div class="stat"><span class="label">Total files</span><span class="value" id="statTotal">0</span></div>
       <div class="stat"><span class="label"><i class="dot video"></i>Videos</span><span class="value" id="statVideos">0</span></div>
+      <div class="stat"><span class="label"><i class="dot"></i>Photos</span><span class="value" id="statPhotos">0</span></div>
       <div class="stat"><span class="label">Folders created</span><span class="value" id="statFolders">0</span></div>
     </div>
   </header>
 
-  <main class="board">
-    <section class="column" aria-labelledby="photosHeading">
-      <h2 id="photosHeading">Photos</h2>
+  <!-- 1. Start: phone, trip name, dates -->
+  <section class="setup-view" id="setupView">
+    <div class="setup-card">
+      <div class="phone-chip" id="phoneChip" data-state="none">
+        <span class="pulse"></span><span id="phoneText">Looking for your phone…</span>
+      </div>
+
+      <div id="setupForm">
+        <label class="field">
+          <span>Trip name</span>
+          <input id="tripInput" type="text" placeholder="Bali 2026" autocomplete="off">
+        </label>
+        <div class="dates">
+          <label class="field"><span>First day</span><input id="fromDate" type="date"></label>
+          <span class="dash" aria-hidden="true">→</span>
+          <label class="field"><span>Last day</span><input id="untilDate" type="date"></label>
+        </div>
+        <div class="chips" id="rangeChips">
+          <button type="button" data-days="1">Today</button>
+          <button type="button" data-days="3">Last 3 days</button>
+          <button type="button" data-days="7" class="on">Last week</button>
+          <button type="button" data-days="14">Last 2 weeks</button>
+          <button type="button" data-days="30">Last month</button>
+        </div>
+        <label class="check"><input type="checkbox" id="skipImported" checked> Skip photos I already copied before</label>
+        <button class="primary wide" id="findBtn" disabled>Find my trip photos</button>
+        <button class="link" id="folderBtn" type="button">or sort a folder that's already on this laptop</button>
+      </div>
+
+      <div id="scanPanel" hidden>
+        <p class="big" id="scanText">Looking through your phone…</p>
+        <p class="muted small">Big phones can take a minute the first time.</p>
+        <div class="progress indeterminate"><div class="bar"></div></div>
+      </div>
+
+      <div id="foundPanel" hidden>
+        <p class="eyebrow muted" id="foundWhere">Found on your phone</p>
+        <p class="big"><span id="foundPhotos">0</span> photos <span class="muted">&amp;</span> <span id="foundVideos">0</span> videos</p>
+        <p class="muted small" id="foundMeta"></p>
+        <div class="days" id="dayBars" aria-label="Photos per day"></div>
+        <button class="primary wide" id="copyBtn">Copy to my laptop &amp; sort</button>
+        <button class="link" id="changeBtn" type="button">Change dates</button>
+      </div>
+
+      <p class="foot muted small" id="saveNote">Photos are copied to your laptop and never uploaded anywhere.</p>
+    </div>
+    <div class="hero-flower" aria-hidden="true"><svg class="flower" viewBox="-100 -100 200 200"><use href="#flowerShape"/></svg></div>
+  </section>
+
+  <!-- 2. Sorting board -->
+  <main class="board" id="board" hidden>
+    <section class="column photos-col" aria-labelledby="photosHeading">
+      <h2 id="photosHeading"><i class="dot"></i>Photos</h2>
       <div class="cards" id="photoCards"></div>
     </section>
 
     <section class="center">
-      <div class="pile" id="pile" aria-hidden="true"></div>
+      <div class="pile-wrap">
+        <div class="pile" id="pile" aria-hidden="true"></div>
+        <div class="loader" id="loader" aria-hidden="true"><svg class="flower spin" viewBox="-100 -100 200 200"><use href="#flowerShape"/></svg></div>
+      </div>
       <p class="pile-caption" id="pileCaption">a total mess</p>
-      <div class="cards" id="specialCards"></div>
       <p class="status" id="status" role="status">Getting ready…</p>
       <div class="progress"><div class="bar" id="bar"></div></div>
-      <button class="primary" id="applyBtn" disabled>Create folders &amp; move files</button>
-      <p class="hint" id="hint">Tip: when sorting finishes, click any folder to check it and move photos the AI got wrong.</p>
+      <div class="actions" id="actions">
+        <button class="primary" id="applyBtn" hidden>Create the folders on my laptop</button>
+      </div>
+      <div class="cards special" id="specialCards"></div>
     </section>
 
-    <section class="column" id="videoColumn" aria-labelledby="videosHeading">
-      <h2 id="videosHeading">Videos</h2>
+    <section class="column videos-col" id="videoColumn" aria-labelledby="videosHeading">
+      <h2 id="videosHeading"><i class="dot video"></i>Videos</h2>
       <div class="cards" id="videoCards"><p class="empty">Videos will appear here.</p></div>
     </section>
   </main>
@@ -53,9 +109,40 @@
       <h3 id="dialogTitle">Folder</h3>
       <button class="ghost" id="dialogClose" aria-label="Close">✕</button>
     </div>
-    <p class="hint">Wrong folder? Pick the right one under the photo.</p>
+    <p class="muted small">Wrong folder? Pick the right one under the photo.</p>
     <div class="grid" id="dialogGrid"></div>
   </dialog>
+
+  <dialog id="deleteDialog" class="confirm">
+    <h3>Delete <span id="deleteCount">0</span> files from your <span id="deletePhone">phone</span>?</h3>
+    <p>They are safely sorted on your laptop. Deleting over the cable is <b>permanent on the phone</b> — they skip “Recently Deleted”.</p>
+    <div class="dialog-actions">
+      <button class="ghost-btn" id="deleteCancel">Keep them</button>
+      <button class="danger" id="deleteConfirm">Yes, delete from phone</button>
+    </div>
+  </dialog>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <radialGradient id="petalFill" cx="0" cy="-40" r="80" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#eef5fe"/><stop offset="1" stop-color="#b8d1f2"/>
+      </radialGradient>
+      <g id="flowerShape">
+        <g fill="url(#petalFill)" stroke="#8fb3e3" stroke-width="1.6">
+          <ellipse cx="0" cy="-50" rx="25" ry="44"/>
+          <ellipse cx="0" cy="-50" rx="25" ry="44" transform="rotate(45)"/>
+          <ellipse cx="0" cy="-50" rx="25" ry="44" transform="rotate(90)"/>
+          <ellipse cx="0" cy="-50" rx="25" ry="44" transform="rotate(135)"/>
+          <ellipse cx="0" cy="-50" rx="25" ry="44" transform="rotate(180)"/>
+          <ellipse cx="0" cy="-50" rx="25" ry="44" transform="rotate(225)"/>
+          <ellipse cx="0" cy="-50" rx="25" ry="44" transform="rotate(270)"/>
+          <ellipse cx="0" cy="-50" rx="25" ry="44" transform="rotate(315)"/>
+        </g>
+        <circle r="21" fill="#13233f"/>
+        <circle cx="7" cy="-5" r="7.5" fill="#fff"/>
+      </g>
+    </defs>
+  </svg>
 
   <script type="module" src="/app.js"></script>
 </body>

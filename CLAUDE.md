@@ -33,21 +33,23 @@ Desktop and Start menu. Running it again updates the app and keeps the person's 
 
 ## 3. Run it
 
-The sorter is interactive: it asks the person for the trip name, the trip dates and, at the end,
-whether to delete the photos from their phone. So **do not run `SortTrip.ps1` in your own
-terminal**. Open it in its own window for the person:
+Start it for the person:
 
 ```powershell
 Start-Process "$env:LOCALAPPDATA\TripPhotoSorter\Sort My Trip.bat"
 ```
 
-or tell them to double-click **Sort My Trip** on the Desktop. Before that, remind them to plug in the
-phone with a cable, **unlock it**, and tap **Trust** (iPhone) or choose **File transfer** (Android).
+or tell them to double-click **Sort My Trip** on the Desktop. A small helper starts minimized and
+opens `http://localhost:8765` in their browser; everything else happens on that page (phone
+status, trip name, date pickers, sorting, review). Before that, remind them to plug in the phone
+with a cable, **unlock it**, and tap **Trust** (iPhone) or choose **File transfer** (Android).
+The helper closes itself when they press **Done**, or 30 minutes after the page is closed.
 
 ## Rules
 
-- **Never answer the delete question for the person**, never type `YES` into that window, and
-  never delete photos from a phone yourself. That decision is theirs alone.
+- **Never press "Delete them from my phone" or "Yes, delete from phone" for the person**, never
+  call `/api/delete` yourself, and never delete photos from a phone in any other way. That
+  decision is theirs alone, even if browser tools would let you click it.
 - Don't move, rename or delete anything in `%USERPROFILE%\Trip Photos` unless asked.
 - The photos stay on the computer. The only downloads are the app, the AI model (from
   huggingface.co, cached by the browser) and two JavaScript libraries from cdn.jsdelivr.net.
