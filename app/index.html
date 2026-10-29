@@ -53,6 +53,15 @@
           <button type="button" data-days="30">Last month</button>
         </div>
         <label class="check"><input type="checkbox" id="skipImported" checked> Skip photos I already copied before</label>
+        <div class="folder-pick">
+          <div class="folder-pick-head">
+            <span class="label">Make these folders</span>
+            <span class="presets"><button type="button" class="link-sm" data-preset="simple">Simple</button> · <button type="button" class="link-sm" data-preset="all">All</button></span>
+          </div>
+          <div class="chips folders" id="folderChips"></div>
+          <p class="muted small" id="folderNote">Anything else goes into one “Other” folder.</p>
+          <label class="check"><input type="checkbox" id="separateVideos"> Separate folders for videos</label>
+        </div>
         <button class="primary wide" id="findBtn" disabled>Find my trip photos</button>
         <button class="link" id="folderBtn" type="button">or sort a folder that's already on this laptop</button>
       </div>

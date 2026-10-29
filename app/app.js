@@ -29,7 +29,42 @@ const state = {
   sorted: 0,
   finished: false,
   closed: false,
+  prefs: null,          // { folders: [category names], separateVideos }
 };
+
+// ------------------------------------------------------------------ which folders to make
+
+const SIMPLE_FOLDERS = ['Me & selfies', 'Group photos', 'Nature', 'Food & cafés', 'Travel & vibe', 'Screenshots'];
+const PREFS_KEY = 'trip-photo-sorter.folders';
+
+function loadPrefs(categories) {
+  const names = categories.map((c) => c.folder);
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(PREFS_KEY)); } catch { /* storage blocked */ }
+  const simple = names.filter((n) => SIMPLE_FOLDERS.includes(n));
+  const folders = (saved?.folders ?? (simple.length ? simple : names)).filter((n) => names.includes(n));
+  return { folders, separateVideos: Boolean(saved?.separateVideos) };
+}
+
+function savePrefs() {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(state.prefs)); } catch { /* storage blocked */ }
+}
+
+function renderFolderChips() {
+  const chosen = new Set(state.prefs.folders);
+  $('#folderChips').innerHTML = state.settings.categories
+    .map((c) => `<button type="button" data-folder="${escapeHtml(c.folder)}" class="${chosen.has(c.folder) ? 'on' : ''}">${escapeHtml(c.folder)}</button>`).join('');
+  const count = chosen.size + 1;
+  $('#folderNote').textContent = `${plural(count, 'folder')} at most — anything else goes into “${state.settings.otherFolder}”.`;
+  $('#separateVideos').checked = state.prefs.separateVideos;
+}
+
+function chooseFolders(folders) {
+  // Keep the settings.json order so folders always appear in the same place.
+  state.prefs.folders = state.settings.categories.map((c) => c.folder).filter((n) => folders.includes(n));
+  savePrefs();
+  renderFolderChips();
+}
 
 // ------------------------------------------------------------------ talking to SortTrip.ps1
 
@@ -230,7 +265,11 @@ async function copyAndSort() {
 
 // ------------------------------------------------------------------ 2. folders, cards and the pile
 
-function folderFor(kind, label) { return `${kind === 'video' ? 'Videos' : 'Photos'}/${label}`; }
+// <trip>\Nature\ by default; <trip>\Photos\Nature\ and <trip>\Videos\Nature\ when videos are kept apart.
+function folderFor(kind, label) {
+  if (!state.prefs.separateVideos) return label;
+  return `${kind === 'video' ? 'Videos' : 'Photos'}/${label}`;
+}
 
 function addFolder(path, label, kind, container, extraClass = '') {
   const card = document.createElement('button');
@@ -242,17 +281,25 @@ function addFolder(path, label, kind, container, extraClass = '') {
 }
 
 function buildFolders() {
-  const { settings, session } = state;
-  const labels = [...settings.categories.map((c) => c.folder), settings.otherFolder];
+  const { settings, session, prefs } = state;
+  const labels = [...prefs.folders, settings.otherFolder];
   $('#photoCards').innerHTML = '';
-  labels.forEach((label) => addFolder(folderFor('photo', label), label, 'photo', $('#photoCards')));
-  if (session.files.some((f) => f.kind === 'video')) {
-    $('#videoCards').innerHTML = '';
-    labels.forEach((label) => addFolder(folderFor('video', label), label, 'video', $('#videoCards')));
-    for (const f of state.folders.values()) if (f.kind === 'video') f.card.hidden = true;
-  } else {
+  if (!prefs.separateVideos) {
+    // One set of folders for photos and videos together.
+    labels.forEach((label) => addFolder(folderFor('photo', label), label, 'all', $('#photoCards')));
+    $('#photosHeading').innerHTML = '<i class="dot"></i>Folders';
     $('#videoColumn').hidden = true;
     $('#board').classList.add('no-videos');
+  } else {
+    labels.forEach((label) => addFolder(folderFor('photo', label), label, 'photo', $('#photoCards')));
+    if (session.files.some((f) => f.kind === 'video')) {
+      $('#videoCards').innerHTML = '';
+      labels.forEach((label) => addFolder(folderFor('video', label), label, 'video', $('#videoCards')));
+      for (const f of state.folders.values()) if (f.kind === 'video') f.card.hidden = true;
+    } else {
+      $('#videoColumn').hidden = true;
+      $('#board').classList.add('no-videos');
+    }
   }
   addFolder(settings.duplicatesFolder, `${settings.duplicatesFolder.replace(/ - to trash$/i, '')} → trash`, 'any', $('#specialCards'), 'trash');
 }
@@ -516,7 +563,8 @@ async function sortFile(ai, categoryVectors, file, seenHashes, recent) {
       if (recent.length > DUPLICATE_WINDOW) recent.shift();
     }
 
-    const screenshots = settings.categories.find((c) => c.folder.toLowerCase() === 'screenshots');
+    const chosen = new Set(state.prefs.folders);
+    const screenshots = settings.categories.find((c) => c.folder.toLowerCase() === 'screenshots' && chosen.has(c.folder));
     if (file.kind === 'photo' && file.ext === '.png' && settings.pngIsScreenshot && screenshots) {
       item.folder = folderFor('photo', screenshots.folder);   // phones save screenshots as PNG, cameras never do
       return item;
@@ -528,7 +576,10 @@ async function sortFile(ai, categoryVectors, file, seenHashes, recent) {
     const exp = logits.map((l) => Math.exp(l - max));
     const sum = exp.reduce((a, b) => a + b, 0);
     const best = logits.indexOf(max);
-    const label = exp[best] / sum >= settings.minConfidence ? settings.categories[best].folder : settings.otherFolder;
+    // The best match among ALL categories decides; if that folder wasn't picked, the photo goes to Other
+    // (rather than being forced into a picked folder it doesn't belong in).
+    const winner = settings.categories[best].folder;
+    const label = exp[best] / sum >= settings.minConfidence && chosen.has(winner) ? winner : settings.otherFolder;
     item.folder = folderFor(file.kind, label);
   } catch (err) {
     console.warn(`Could not read ${file.name}:`, err);
@@ -541,6 +592,7 @@ async function startSorting() {
   state.stage = 'sorting';
   const [session, settings] = await Promise.all([getJson('/api/session'), getJson('/settings.json')]);
   Object.assign(state, { session, settings });
+  state.prefs ??= loadPrefs(settings.categories);
   setTitle('Sorting my', session.trip);
   document.title = `Sorting ${session.trip}`;
   showBoard();
@@ -577,7 +629,7 @@ async function startSorting() {
 // ------------------------------------------------------------------ 5. review dialog
 
 function folderOptions(kind) {
-  return [...state.folders.entries()].filter(([, f]) => f.kind === kind || f.kind === 'any');
+  return [...state.folders.entries()].filter(([, f]) => f.kind === kind || f.kind === 'any' || f.kind === 'all');
 }
 
 function openFolder(path) {
@@ -630,8 +682,10 @@ function reportHtml(css, result) {
 <div class="stat"><span class="label"><i class="dot video"></i>Videos</span><span class="value">${videos}</span></div>
 <div class="stat"><span class="label"><i class="dot"></i>Photos</span><span class="value">${photos}</span></div>
 <div class="stat"><span class="label">Folders created</span><span class="value">${result.folders}</span></div></div></header>
-<main class="board"><section><h2><i class="dot"></i>Photos</h2><div class="cards">${column('photo')}</div></section>
-<section><h2><i class="dot video"></i>Videos</h2><div class="cards">${column('video') || '<p class="empty">No videos.</p>'}</div>
+<main class="board">${state.prefs.separateVideos
+    ? `<section><h2><i class="dot"></i>Photos</h2><div class="cards">${column('photo')}</div></section>
+<section><h2><i class="dot video"></i>Videos</h2><div class="cards">${column('video') || '<p class="empty">No videos.</p>'}</div>`
+    : `<section><h2><i class="dot"></i>Folders</h2><div class="cards">${column('all')}</div></section><section>`}
 <h2>Check, then delete</h2><div class="cards">${card(settings.duplicatesFolder, state.folders.get(settings.duplicatesFolder)) || '<p class="empty">No duplicates found.</p>'}</div></section></main>
 </body></html>`;
 }
@@ -747,8 +801,25 @@ $('#deleteConfirm').addEventListener('click', deleteFromPhone);
 // Tell the helper the page is still open (it quits by itself 30 minutes after it's closed).
 setInterval(() => { if (!state.closed) fetch('/api/ping').catch(() => {}); }, 20000);
 
+$('#folderChips').addEventListener('click', (e) => {
+  const name = e.target.dataset.folder;
+  if (!name) return;
+  const folders = new Set(state.prefs.folders);
+  if (folders.has(name)) folders.delete(name); else folders.add(name);
+  chooseFolders([...folders]);
+});
+for (const button of document.querySelectorAll('[data-preset]')) {
+  button.addEventListener('click', () => chooseFolders(button.dataset.preset === 'all'
+    ? state.settings.categories.map((c) => c.folder)
+    : SIMPLE_FOLDERS));
+}
+$('#separateVideos').addEventListener('change', (e) => { state.prefs.separateVideos = e.target.checked; savePrefs(); });
+
 async function main() {
   setRange(7);
+  state.settings = await getJson('/settings.json');
+  state.prefs = loadPrefs(state.settings.categories);
+  renderFolderChips();
   const status = await getJson('/api/status');
   if (status.hasSession && !status.applied) { await startSorting(); return; }
   updatePhone(status.phone);

@@ -60,14 +60,11 @@ You end up with:
 ```
 Trip Photos\
   Bali 2026\
-    Photos\
-      Me & selfies\
-      Group photos\
-      Nature\
-      Food & cafés\
-      ...
-    Videos\
-      ...
+    Me & selfies\        <- only the folders you picked, and only if they have photos
+    Group photos\
+    Nature\
+    Food & cafés\
+    Other\               <- everything that doesn't fit your picks
     Duplicates - to trash\     <- look through these, then delete the folder
     Sorting report.html        <- a page with every folder and preview pictures
     sorting-log.json           <- which original file went where
@@ -98,7 +95,16 @@ The original folder is copied, never changed.
 | Other | Anything the AI isn't sure about, or can't open |
 | Duplicates - to trash | Exact copies and near-identical burst shots |
 
-Videos are sorted the same way, using a frame from about one second into each clip.
+Videos are sorted the same way, using a frame from about one second into each clip, and go into
+the same folders as the photos.
+
+### Choose which folders to make
+
+On the start screen, under **Make these folders**, tick only the folders you want. **Simple**
+picks six (Me & selfies, Group photos, Nature, Food & cafés, Travel & vibe, Screenshots) and is
+the default; **All** picks every one. A photo whose best match is a folder you didn't pick goes
+into **Other**, so you never get more folders than you asked for. Tick **Separate folders for
+videos** if you'd rather have `Photos\Nature` and `Videos\Nature`. Your choice is remembered.
 
 ### Change the folders
 
