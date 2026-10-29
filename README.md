@@ -11,23 +11,45 @@ whether to delete them from the phone.
 - **Safe.** Nothing is deleted from the phone unless every file has been checked on the laptop
   *and* you type `YES`. Duplicates go into a folder for you to check, not the bin.
 
+## Install
+
+Free for anyone. Pick one way:
+
+**A. Let Claude do it.** Open the Claude desktop app, go to the **Code** tab (or use Claude Code),
+and paste:
+
+> Install and set up this for me: https://github.com/OWNER/trip-photo-sorter
+
+Claude reads [CLAUDE.md](CLAUDE.md), installs it and puts a **Sort My Trip** shortcut on your
+Desktop. (A normal Claude chat on the website can't install things on your computer, so use the
+Code tab.)
+
+**B. One line in PowerShell.** Press Start, type *PowerShell*, open it and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/OWNER/trip-photo-sorter/main/install.ps1 | iex
+```
+
+**C. By hand.** Green **Code** button → **Download ZIP**, unzip it, then double-click
+`Sort My Trip.bat` inside the folder (no shortcut is created this way).
+
+To uninstall, run `install.ps1 -Uninstall`. Your photos are never touched.
+
 ## How to use it
 
-1. Download this project: green **Code** button → **Download ZIP**, then unzip it anywhere
-   (for example into `Documents`).
-2. Plug in your phone with a cable and **unlock it**.
+1. Plug in your phone with a cable and **unlock it**.
    - **iPhone:** tap **Trust** when asked. Tip: in *Settings → Apps → Photos → Transfer to Mac or PC*
      choose **Automatic**, so photos arrive as normal JPGs that every browser can read.
    - **Android:** pull down the notification bar, tap the USB notification and pick **File transfer**.
-3. Double-click **`Sort My Trip.bat`** and follow the prompts in the black window:
+2. Double-click **Sort My Trip** on your Desktop (or ask Claude to start it) and follow the prompts in the black window:
    - name the trip (for example `Bali 2026`)
    - type the first and last day of the trip, or just press Enter to take every photo not imported before
-4. The photos are copied to `C:\Users\<you>\Trip Photos\<trip name>` and your browser opens the sorter.
+3. The photos are copied to `C:\Users\<you>\Trip Photos\<trip name>` and your browser opens the sorter.
    Watch them fly out of the pile into folders.
-5. When it says **All sorted**, click any folder to check it. If the AI got one wrong, pick the
+4. When it says **All sorted**, click any folder to check it. If the AI got one wrong, pick the
    right folder under that photo.
-6. Press **Create folders & move files**.
-7. Go back to the black window. It checks that every file is safely on the laptop, then asks:
+5. Press **Create folders & move files**.
+6. Go back to the black window. It checks that every file is safely on the laptop, then asks:
    *Do you want to DELETE these files from your phone?* Type `YES` to free up space, or just
    press Enter to keep them.
 
