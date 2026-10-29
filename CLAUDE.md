@@ -42,12 +42,13 @@ Start-Process "$env:LOCALAPPDATA\TripPhotoSorter\Sort My Trip.bat"
 or tell them to double-click **Sort My Trip** on the Desktop. A small helper starts minimized and
 opens `http://localhost:8765` in their browser; everything else happens on that page (phone
 status, trip name, date pickers, sorting, review). Before that, remind them to plug in the phone
-with a cable, **unlock it**, and tap **Trust** (iPhone) or choose **File transfer** (Android).
+with a cable, **unlock it**, and tap **Trust** (iPhone) or choose **File transfer** (Android) — or to
+put the camera's memory card in the card reader / plug in the USB stick. All of these are detected.
 The helper closes itself when they press **Done**, or 30 minutes after the page is closed.
 
 ## Rules
 
-- **Never press "Delete them from my phone" or "Yes, delete from phone" for the person**, never
+- **Never press "Delete them from my phone/card" or "Yes, delete from phone/card" for the person**, never
   call `/api/delete` yourself, and never delete photos from a phone in any other way. That
   decision is theirs alone, even if browser tools would let you click it.
 - Don't move, rename or delete anything in `%USERPROFILE%\Trip Photos` unless asked.
@@ -67,6 +68,7 @@ explains every setting.
 | "I can see 'Apple iPhone' but not its photos" | Unlock the phone, tap **Trust**, unplug and plug in again. |
 | "No phone found" (Android) | USB notification → **File transfer / Android Auto**, not "Charging only". |
 | Browser page stuck on "Downloading the AI model" | Needs internet once (about 230 MB). Corporate proxies may block huggingface.co. |
+| Card or USB stick not shown | Only removable drives are listed; external hard disks aren't. Use **or sort a folder** for those. |
 | Phone deletion reports fewer files deleted | On iPhone with iCloud Photos on, Windows can't delete; delete in the Photos app instead. |
 | Port 8765 busy | The script tries the next 19 ports automatically. |
 | Many photos in *Other* | Lower `minConfidence` in settings.json, or add more descriptions to a category. |

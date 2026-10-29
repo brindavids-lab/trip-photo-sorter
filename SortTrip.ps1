@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
   Trip Photo Sorter. Starts a small local server and opens the sorter page in your browser.
-  Everything else happens on that page: finding the phone, choosing the trip dates, copying,
-  AI sorting, and (only if you confirm) deleting the copied photos from the phone.
+  Everything else happens on that page: finding the phone, memory card or USB stick, choosing
+  the trip dates, copying, AI sorting, and (only if you confirm) deleting the copied photos from it.
 
 .EXAMPLE
   .\SortTrip.ps1                 # normally started minimized by "Sort My Trip.bat"
@@ -11,7 +11,8 @@
 param(
     [string]$TripsFolder,   # where trip folders are created (default: settings.json, then %USERPROFILE%\Trip Photos)
     [switch]$NoBrowser,     # don't open the browser or Explorer automatically
-    [int]$Port = 8765
+    [int]$Port = 8765,
+    [string[]]$TestCard     # treat these folders like plugged-in memory cards (for testing without one)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,9 +23,11 @@ if (-not ('TripSorter.ShellOps' -as [type])) {
     Add-Type -TypeDefinition (Get-Content -LiteralPath (Join-Path $AppDir 'lib\ShellOps.cs') -Raw)
 }
 
-$PhotoExt = '.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif', '.dng'
-$VideoExt = '.mov', '.mp4', '.m4v', '.3gp'
-$MediaExt = $PhotoExt + $VideoExt
+$PhotoExt = '.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif'
+# Camera RAW files: browsers can't open them, so the page files each one next to its matching JPG.
+$RawExt = '.dng', '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.raf', '.orf', '.rw2', '.pef', '.srw'
+$VideoExt = '.mov', '.mp4', '.m4v', '.3gp', '.mts', '.m2ts'
+$MediaExt = $PhotoExt + $RawExt + $VideoExt
 $Utf8 = New-Object System.Text.UTF8Encoding $false
 $IdleMinutes = 30   # quit when the page has been closed this long
 
@@ -72,14 +75,60 @@ function Find-PhotoFolder($Folder, [int]$Depth) {
     $null
 }
 
+# Phones plugged in with a cable appear under "This PC" as portable devices. Every storage is
+# checked, so photos on an Android phone's memory card are found as well as internal ones.
 function Find-Phones {
     $shell = New-Object -ComObject Shell.Application
     foreach ($device in $shell.Namespace(17).Items()) {   # 17 = "This PC"
         if ($device.IsFileSystem -or -not $device.IsFolder) { continue }   # skip C:, D:, ...
-        $photos = $null
-        try { $photos = Find-PhotoFolder $device.GetFolder 0 } catch {}
-        # A locked or not-yet-trusted phone shows up with empty storage, so Photos stays $null.
-        [pscustomobject]@{ Name = $device.Name; Photos = $photos }
+        $roots = New-Object System.Collections.ArrayList
+        try {
+            foreach ($storage in $device.GetFolder.Items()) {
+                if (-not $storage.IsFolder) { continue }
+                $photos = Find-PhotoFolder $storage.GetFolder 1
+                if ($photos) { [void]$roots.Add([pscustomobject]@{ Storage = $storage.Name; Folder = $photos; Prefix = '' }) }
+            }
+        } catch {}
+        # Phone storage and a memory card can both have DCIM\Camera\IMG_0001.jpg, so keep them apart.
+        if ($roots.Count -gt 1) { foreach ($r in $roots) { $r.Prefix = $r.Storage } }
+        # A locked or not-yet-trusted phone shows up with empty storage, so it has no roots yet.
+        [pscustomobject]@{ Id = "phone:$($device.Name)"; Kind = 'phone'; Name = $device.Name; Roots = @($roots); Path = $null; Key = $device.Name }
+    }
+}
+
+# SD cards in a card reader and USB sticks get a drive letter. Camera cards keep photos in DCIM.
+function Find-Drives {
+    foreach ($drive in [IO.DriveInfo]::GetDrives()) {
+        if ($drive.DriveType -ne 'Removable' -or -not $drive.IsReady) { continue }
+        $letter = $drive.Name.TrimEnd('\')
+        $dcim = Join-Path $drive.RootDirectory.FullName 'DCIM'
+        $isCard = Test-Path -LiteralPath $dcim
+        [pscustomobject]@{
+            Id = "drive:$letter"; Kind = 'drive'; Roots = @()
+            Name = "$(if ($isCard) { 'memory card' } else { 'USB drive' }) ($letter)"
+            Path = $(if ($isCard) { $dcim } else { $drive.RootDirectory.FullName })
+            Key = "card:$($drive.VolumeLabel):$($drive.TotalSize)"   # letters change between plug-ins
+        }
+    }
+    foreach ($path in $TestCard) {
+        [pscustomobject]@{ Id = "drive:$path"; Kind = 'drive'; Roots = @(); Name = 'memory card (test)'; Path = $path; Key = "card:test:$path" }
+    }
+}
+
+function Get-FolderMedia([string]$Root) {
+    $base = $Root.TrimEnd('\')
+    foreach ($f in Get-ChildItem -LiteralPath "$base\" -Recurse -File -ErrorAction SilentlyContinue) {
+        if ($MediaExt -notcontains $f.Extension.ToLower()) { continue }
+        $rel = $f.FullName.Substring($base.Length + 1)
+        [pscustomobject]@{ Name = $f.Name; Folder = (Split-Path $rel); Rel = $rel; Size = $f.Length; Date = $f.LastWriteTime; Item = $null; Path = $f.FullName }
+    }
+}
+
+function Get-DeviceMedia($Device) {
+    if ($Device.Kind -eq 'phone') {
+        foreach ($root in $Device.Roots) { Get-PhoneMedia $root.Folder $root.Prefix $State.From $State.Until }
+    } else {
+        Get-FolderMedia $Device.Path
     }
 }
 
@@ -224,13 +273,12 @@ function ConvertTo-Day($Text) { if ($Text) { [datetime]::ParseExact($Text, 'yyyy
 
 # ---------------------------------------------------------------- the steps the page asks for
 
-function Get-PhoneStatus {
-    $devices = @(Find-Phones)
-    $ready = @($devices | Where-Object { $_.Photos })
-    if ($ready) { $State.Phone = $ready[0]; return @{ name = $ready[0].Name; ready = $true } }
-    $State.Phone = $null
-    if ($devices) { return @{ name = $devices[0].Name; ready = $false } }
-    $null
+# Everything the photos could come from right now: phones, memory cards, USB sticks.
+function Get-DeviceStatus {
+    $list = @(@(Find-Phones) + @(Find-Drives))
+    $State.Devices = @{}
+    foreach ($d in $list) { $State.Devices[$d.Id] = $d }
+    foreach ($d in $list) { @{ id = $d.Id; name = $d.Name; kind = $d.Kind; ready = ($d.Kind -eq 'drive' -or $d.Roots.Count -gt 0) } }
 }
 
 function Invoke-PickFolder($Ctx) {
@@ -248,10 +296,10 @@ function Invoke-PickFolder($Ctx) {
     Send-Json $Ctx @{ path = $path }
 }
 
-# Lists what would be copied: phone photos in the trip dates, or every photo in a folder.
+# Lists what would be copied: photos in the trip dates from a phone or card, or every photo in a folder.
 function Invoke-Scan($Ctx) {
     $req = Read-Body $Ctx | ConvertFrom-Json
-    $State.Mode = $req.mode
+    $State.Mode = $req.mode   # 'device' or 'folder'
     $State.From = ConvertTo-Day $req.from
     $State.Until = ConvertTo-Day $req.until
     $State.Items.Clear()
@@ -260,21 +308,25 @@ function Invoke-Scan($Ctx) {
 
     if ($req.mode -eq 'folder') {
         $root = (Resolve-Path -LiteralPath $req.path).ProviderPath.TrimEnd('\')
-        $State.Source = $root
+        $State.Device = $null
+        $State.SourceName = $root
         Send-Line $res @{ type = 'progress'; found = 0; where = $root }
-        foreach ($f in Get-ChildItem -LiteralPath $root -Recurse -File) {
-            if ($MediaExt -notcontains $f.Extension.ToLower()) { continue }
-            $rel = $f.FullName.Substring($root.Length + 1)
-            [void]$State.Items.Add([pscustomobject]@{ Name = $f.Name; Folder = (Split-Path $rel); Rel = $rel; Size = $f.Length; Date = $f.LastWriteTime; Item = $null; Path = $f.FullName })
+        foreach ($m in Get-FolderMedia $root) {
+            [void]$State.Items.Add($m)
             if ($State.Items.Count % 50 -eq 0) { Send-Line $res @{ type = 'progress'; found = $State.Items.Count } }
         }
     } else {
-        if (-not $State.Phone) { [void](Get-PhoneStatus) }
-        if (-not $State.Phone) { Send-Line $res @{ type = 'error'; message = 'Your phone is not connected or is locked.' }; return }
+        if (-not $State.Devices[$req.device]) { [void](Get-DeviceStatus) }
+        $device = $State.Devices[$req.device]
+        if (-not $device -or ($device.Kind -eq 'phone' -and -not $device.Roots)) {
+            Send-Line $res @{ type = 'error'; message = 'It is no longer connected (or the phone is locked). Plug it in again.' }; return
+        }
+        $State.Device = $device
+        $State.SourceName = $device.Name
         $ledger = @{}
         if ($req.skipImported -and (Test-Path -LiteralPath $LedgerPath)) { foreach ($line in [IO.File]::ReadAllLines($LedgerPath)) { $ledger[$line] = $true } }
-        Send-Line $res @{ type = 'progress'; found = 0; where = $State.Phone.Name }
-        foreach ($m in Get-PhoneMedia $State.Phone.Photos '' $State.From $State.Until) {
+        Send-Line $res @{ type = 'progress'; found = 0; where = $device.Name }
+        foreach ($m in Get-DeviceMedia $device) {
             $seen++
             if ($seen % 25 -eq 0) { Send-Line $res @{ type = 'progress'; found = $State.Items.Count; where = $m.Folder } }
             # Files without a date are kept rather than silently left behind.
@@ -290,12 +342,11 @@ function Invoke-Scan($Ctx) {
     $bytes = ($State.Items | Measure-Object -Property Size -Sum).Sum
     Send-Line $res @{
         type = 'done'; total = $State.Items.Count; photos = $State.Items.Count - $videos; videos = $videos
-        where = $(if ($req.mode -eq 'folder') { $State.Source } else { $State.Phone.Name })
-        bytes = [int64]$bytes; skipped = $skipped; days = $days
+        where = $State.SourceName; bytes = [int64]$bytes; skipped = $skipped; days = $days
     }
 }
 
-function Get-LedgerKey($M) { "$($State.Phone.Name)|$($M.Rel)|$(if ($M.Date) { $M.Date.ToString('s') })" }
+function Get-LedgerKey($M) { "$($State.Device.Key)|$($M.Rel)|$(if ($M.Date) { $M.Date.ToString('s') })" }
 
 # Copies the scanned files into <Trip Photos>\<trip>\_incoming, then prepares the sorting session.
 function Invoke-Copy($Ctx) {
@@ -311,7 +362,7 @@ function Invoke-Copy($Ctx) {
     $items = @($State.Items)
     for ($i = 0; $i -lt $items.Count; $i += 20) {
         $batch = @($items[$i..([Math]::Min($i + 19, $items.Count - 1))])
-        if ($State.Mode -eq 'phone') {
+        if ($State.Mode -eq 'device' -and $State.Device.Kind -eq 'phone') {
             Copy-FromPhone $batch $State.Incoming
         } else {
             foreach ($f in $batch) {
@@ -324,20 +375,23 @@ function Invoke-Copy($Ctx) {
     }
 
     $copied = @($items | Where-Object { Test-Path -LiteralPath (Join-Path $State.Incoming $_.Rel) })
-    if ($State.Mode -eq 'phone' -and $copied) {
+    if ($State.Mode -eq 'device' -and $copied) {
         [IO.File]::AppendAllLines($LedgerPath, [string[]]@($copied | ForEach-Object { Get-LedgerKey $_ }), $Utf8)
     }
     $State.Copied = $copied
 
     $State.Files = @(Get-ChildItem -LiteralPath $State.Incoming -Recurse -File | Where-Object { $MediaExt -contains $_.Extension.ToLower() } | Sort-Object FullName)
     $State.Session = @{
-        trip = $State.TripName; tripDir = $State.TripDir; fromPhone = ($State.Mode -eq 'phone')
-        phoneName = $(if ($State.Phone) { $State.Phone.Name })
+        trip = $State.TripName; tripDir = $State.TripDir
+        canFreeUp = ($State.Mode -eq 'device'); sourceName = $State.SourceName
+        sourceKind = $(if ($State.Device) { $State.Device.Kind } else { 'folder' })
         files = @(for ($i = 0; $i -lt $State.Files.Count; $i++) {
             $f = $State.Files[$i]
+            $ext = $f.Extension.ToLower()
             @{
-                id = $i; name = $f.Name; ext = $f.Extension.ToLower(); size = $f.Length; date = $f.LastWriteTime.ToString('s')
-                kind = $(if ($VideoExt -contains $f.Extension.ToLower()) { 'video' } else { 'photo' })
+                id = $i; name = $f.Name; ext = $ext; size = $f.Length; date = $f.LastWriteTime.ToString('s')
+                rel = $f.FullName.Substring($State.Incoming.Length + 1).Replace('\', '/')
+                kind = $(if ($VideoExt -contains $ext) { 'video' } elseif ($RawExt -contains $ext) { 'raw' } else { 'photo' })
             }
         })
     }
@@ -374,9 +428,9 @@ function Invoke-Apply($Ctx) {
     Send-Json $Ctx @{ ok = $true; tripDir = $State.TripDir; moved = $manifest.Count; folders = $folders.Count; leftover = $leftover; deletable = @(Get-SafeToDelete).Count }
 }
 
-# Phone files whose laptop copy exists in the trip folder with exactly the same size.
+# Phone or card files whose laptop copy exists in the trip folder with exactly the same size.
 function Get-SafeToDelete {
-    if ($State.Mode -ne 'phone' -or -not $State.Applied) { return }
+    if ($State.Mode -ne 'device' -or -not $State.Applied) { return }
     $sortedByOriginal = @{}
     foreach ($entry in $State.Manifest) { $sortedByOriginal[$entry.original] = $entry }
     foreach ($m in $State.Copied) {
@@ -395,15 +449,25 @@ function Invoke-Delete($Ctx) {
     if (-not $safe) { Send-Line $res @{ type = 'done'; deleted = 0; total = 0; message = 'Nothing was verified on the laptop, so nothing was deleted.' }; return }
     $State.Deleted = $true
     $problem = $null
+    $isPhone = $State.Device.Kind -eq 'phone'
     for ($i = 0; $i -lt $safe.Count; $i += 25) {
         $batch = @($safe[$i..([Math]::Min($i + 24, $safe.Count - 1))])
-        try { [void][TripSorter.ShellOps]::Delete([object[]]@($batch | ForEach-Object { $_.Item.psobject.BaseObject })) }
-        catch { $problem = $_.Exception.Message }
+        if ($isPhone) {
+            try { [void][TripSorter.ShellOps]::Delete([object[]]@($batch | ForEach-Object { $_.Item.psobject.BaseObject })) }
+            catch { $problem = $_.Exception.Message }
+        } else {
+            # Memory cards and USB sticks have no Recycle Bin, so this is permanent too.
+            foreach ($f in $batch) { try { [IO.File]::Delete($f.Path) } catch { $problem = $_.Exception.Message } }
+        }
         Send-Line $res @{ type = 'progress'; done = $i + $batch.Count; total = $safe.Count }
     }
     Send-Line $res @{ type = 'checking' }
     $stillThere = @{}
-    foreach ($m in Get-PhoneMedia $State.Phone.Photos '' $State.From $State.Until) { $stillThere[$m.Rel] = $true }
+    if ($isPhone) {
+        foreach ($m in Get-DeviceMedia $State.Device) { $stillThere[$m.Rel] = $true }
+    } else {
+        foreach ($f in $safe) { if (Test-Path -LiteralPath $f.Path) { $stillThere[$f.Rel] = $true } }
+    }
     $deleted = @($safe | Where-Object { -not $stillThere[$_.Rel] }).Count
     Send-Line $res @{ type = 'done'; deleted = $deleted; total = $safe.Count; message = $problem }
 }
@@ -417,7 +481,7 @@ function Invoke-Request($Ctx) {
         '^/settings\.json$' { Send-File $Ctx (Join-Path $AppDir 'settings.json'); return }
         '^/api/ping$' { Send-Text $Ctx 200 'trip-photo-sorter'; return }
         '^/api/status$' {
-            Send-Json $Ctx @{ tripsRoot = $TripsRoot; phone = (Get-PhoneStatus); hasSession = [bool]$State.Session; applied = $State.Applied }
+            Send-Json $Ctx @{ tripsRoot = $TripsRoot; devices = @(Get-DeviceStatus); hasSession = [bool]$State.Session; applied = $State.Applied }
             return
         }
         '^/api/session$' { if ($State.Session) { Send-Json $Ctx $State.Session } else { Send-Text $Ctx 404 'No trip yet' }; return }
@@ -467,7 +531,7 @@ try {
     $LedgerPath = Join-Path $TripsRoot '.imported-from-phone.txt'
 
     $State = @{
-        Phone = $null; Mode = $null; Source = $null; From = $null; Until = $null
+        Devices = @{}; Device = $null; SourceName = $null; Mode = $null; From = $null; Until = $null
         Items = (New-Object System.Collections.ArrayList); Copied = @()
         TripName = $null; TripDir = $null; Incoming = $null; Files = @(); Session = $null
         Applied = $false; Manifest = $null; Deleted = $false; Finished = $false; LastSeen = Get-Date

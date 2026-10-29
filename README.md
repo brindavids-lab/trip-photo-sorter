@@ -1,14 +1,14 @@
 # Trip Photo Sorter
 
-Back from a trip? Plug your phone into your Windows laptop, double-click one file, and your
-photos and videos get copied off the phone, sorted by AI into folders like **Me & selfies**,
-**Group photos**, **Nature**, **Food & cafés** and **Travel & vibe**, and then you're asked
-whether to delete them from the phone.
+Back from a trip? Plug your phone (iPhone or Android), camera memory card or USB stick into your
+Windows laptop, double-click one file, and your photos and videos get copied to the laptop, sorted
+by AI into folders like **Me & selfies**, **Group photos**, **Nature**, **Food & cafés** and
+**Travel & vibe**, and then you're asked whether to delete them from the phone or card.
 
 - **Nothing to install.** It uses PowerShell (built into Windows) and your web browser (Edge or Chrome).
 - **Private.** The AI runs inside your browser on your own laptop. Your photos are never uploaded.
   The only download is the AI model itself (about 150–250 MB, the first time only).
-- **Safe.** Nothing is deleted from the phone unless every file has been checked on the laptop
+- **Safe.** Nothing is deleted from the phone or card unless every file has been checked on the laptop
   *and* you confirm it. Duplicates go into a folder for you to check, not the bin.
 
 ## Install
@@ -37,19 +37,22 @@ To uninstall, run `install.ps1 -Uninstall`. Your photos are never touched.
 
 ## How to use it
 
-1. Plug in your phone with a cable and **unlock it**.
+1. Plug in your phone with a cable and **unlock it** — or put your camera's memory card in the
+   card reader, or plug in a USB stick.
    - **iPhone:** tap **Trust** when asked. Tip: in *Settings → Apps → Photos → Transfer to Mac or PC*
      choose **Automatic**, so photos arrive as normal JPGs that every browser can read.
    - **Android:** pull down the notification bar, tap the USB notification and pick **File transfer**.
+     Photos on the phone's own memory card are found too.
 2. Double-click **Sort My Trip** on your Desktop (or ask Claude to start it). The sorter opens in
-   your browser and shows a green dot when it sees your phone.
+   your browser and shows a green dot when it sees your phone or card. If several are plugged in,
+   click the one you want.
 3. Give the trip a name and pick the **first and last day** with the date pickers (or tap
    *Last week*, *Last 2 weeks*, ...). Press **Find my trip photos**.
 4. Check what it found — photos and videos per day — and press **Copy to my laptop & sort**.
 5. Watch the photos fly out of the pile into folders. When it says **All sorted**, click any
    folder to check it; if the AI got one wrong, pick the right folder under that photo.
 6. Press **Create the folders on my laptop**.
-7. Optional: press **Delete them from my phone** to free up space. It only offers this after
+7. Optional: press **Delete them from my phone** (or card) to free up space. It only offers this after
    checking every file on the laptop, and asks you to confirm first. Then press **Done**.
 
 There is no black window to type into: the small helper runs minimized in the taskbar and closes
@@ -72,7 +75,7 @@ Trip Photos\
 
 ### Sort a folder instead of a phone
 
-If your photos are already on the laptop (an SD card, a Google Photos export, ...), click
+If your photos are already on the laptop (a Google Photos export, an old backup, ...), click
 **or sort a folder that's already on this laptop** on the start screen and pick the folder.
 The original folder is copied, never changed.
 
@@ -127,6 +130,11 @@ freely — for example a `"Work from home"` folder, or `"Weddings"` with prompts
   including all group photos. The check-and-fix step is there for the rest.
 - **Speed:** fast on laptops whose browser can use the graphics chip (WebGPU); otherwise it runs on
   the processor and takes longer. The page shows a time estimate while it works.
+- **Camera RAW files** (`.CR2`, `.CR3`, `.NEF`, `.ARW`, `.RAF`, `.ORF`, `.RW2`, `.DNG`, ...) are copied
+  too and put in the same folder as the JPG with the same name (`IMG_0042.CR2` goes wherever
+  `IMG_0042.JPG` went). A RAW file without a matching JPG goes to *Other*.
+- **Memory cards and USB sticks** have no Recycle Bin, so "free up space" deletes for good — but
+  only files that were checked byte-for-byte on the laptop first.
 - **HEIC photos** (iPhone "High Efficiency") are converted in the browser, which is slow. Setting the
   iPhone to *Transfer → Automatic* (see above) avoids that.
 - **Videos** that the browser can't play (some iPhone HEVC videos on older PCs) go to *Videos/Other*.

@@ -31,9 +31,10 @@
   <!-- 1. Start: phone, trip name, dates -->
   <section class="setup-view" id="setupView">
     <div class="setup-card">
-      <div class="phone-chip" id="phoneChip" data-state="none">
-        <span class="pulse"></span><span id="phoneText">Looking for your phone…</span>
+      <div class="devices" id="devices" role="radiogroup" aria-label="Where are the photos?">
+        <span class="phone-chip" data-state="none"><span class="pulse"></span><span>Looking for your phone or memory card…</span></span>
       </div>
+      <p class="muted small error-text" id="scanError" hidden></p>
 
       <div id="setupForm">
         <label class="field">
@@ -124,7 +125,7 @@
 
   <dialog id="deleteDialog" class="confirm">
     <h3>Delete <span id="deleteCount">0</span> files from your <span id="deletePhone">phone</span>?</h3>
-    <p>They are safely sorted on your laptop. Deleting over the cable is <b>permanent on the phone</b> — they skip “Recently Deleted”.</p>
+    <p>They are safely sorted on your laptop. <span id="deleteNote">Deleting over the cable is <b>permanent on the phone</b> — they skip “Recently Deleted”.</span></p>
     <div class="dialog-actions">
       <button class="ghost-btn" id="deleteCancel">Keep them</button>
       <button class="danger" id="deleteConfirm">Yes, delete from phone</button>

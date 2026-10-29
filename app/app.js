@@ -19,7 +19,9 @@ const TRASH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" 
 
 const state = {
   stage: 'setup',
-  phone: null,          // { name, ready }
+  devices: [],          // phones, memory cards, USB sticks: { id, name, kind, ready }
+  deviceId: null,       // the one the photos come from
+  watching: false,
   session: null,
   settings: null,
   items: [],            // { file, thumb, folder, embedding }
@@ -174,39 +176,50 @@ function setRange(days) {
   $('#tripInput').placeholder = defaultTripName();
 }
 
-function updatePhone(phone) {
-  state.phone = phone;
-  const chip = $('#phoneChip');
-  if (phone?.ready) {
-    chip.dataset.state = 'ready';
-    $('#phoneText').textContent = `${phone.name} connected`;
-  } else if (phone) {
-    chip.dataset.state = 'locked';
-    $('#phoneText').textContent = `Unlock your ${phone.name.replace(/^Apple /, '')} and tap “Trust”`;
-  } else {
-    chip.dataset.state = 'none';
-    $('#phoneText').textContent = 'Plug in your phone with a cable';
-  }
-  $('#findBtn').disabled = !phone?.ready;
-  $('#findBtn').textContent = phone?.ready ? 'Find my trip photos' : 'Waiting for your phone…';
+const shortName = (name) => name.replace(/^Apple /, '');
+const selectedDevice = () => state.devices.find((d) => d.id === state.deviceId);
+
+function deviceLabel(device) {
+  if (device.ready) return `${device.kind === 'phone' ? device.name : `${device.name[0].toUpperCase()}${device.name.slice(1)}`} connected`;
+  return /iphone|ipad/i.test(device.name)
+    ? `Unlock your ${shortName(device.name)} and tap “Trust”`
+    : `Unlock your ${device.name} and choose “File transfer”`;
 }
 
-async function watchPhone() {
+// One chip per phone, memory card or USB stick; with several, click one to choose it.
+function updateDevices(devices) {
+  state.devices = devices ?? [];
+  if (!selectedDevice()?.ready) state.deviceId = state.devices.find((d) => d.ready)?.id ?? null;
+  const box = $('#devices');
+  box.classList.toggle('many', state.devices.length > 1);
+  box.innerHTML = state.devices.length
+    ? state.devices.map((d) => `<button type="button" class="phone-chip" role="radio" aria-checked="${d.id === state.deviceId}" data-id="${escapeHtml(d.id)}" data-state="${d.ready ? 'ready' : 'locked'}"><span class="pulse"></span><span>${escapeHtml(deviceLabel(d))}</span></button>`).join('')
+    : '<span class="phone-chip" data-state="none"><span class="pulse"></span><span>Plug in your phone, memory card or USB stick</span></span>';
+  const ready = Boolean(selectedDevice()?.ready);
+  $('#findBtn').disabled = !ready;
+  $('#findBtn').textContent = ready ? 'Find my trip photos' : 'Waiting for your phone or card…';
+}
+
+async function watchDevices() {
+  if (state.watching) return;
+  state.watching = true;
   while (!state.closed && ['setup', 'found'].includes(state.stage)) {
     try {
       const status = await getJson('/api/status');
       if (!['setup', 'found'].includes(state.stage)) break;
-      updatePhone(status.phone);
+      updateDevices(status.devices);
       $('#saveNote').textContent = `Saved to ${status.tripsRoot} — your photos never leave this laptop.`;
     } catch { /* server busy or restarting */ }
     await sleep(2500);
   }
+  state.watching = false;
 }
 
 async function scan(body) {
   state.stage = 'scanning';
+  $('#scanError').hidden = true;
   showSetupPanel('scanPanel');
-  $('#scanText').textContent = body.mode === 'folder' ? 'Looking through the folder…' : `Looking through your ${state.phone?.name ?? 'phone'}…`;
+  $('#scanText').textContent = body.mode === 'folder' ? 'Looking through the folder…' : `Looking through your ${shortName(selectedDevice()?.name ?? 'phone')}…`;
   try {
     for await (const msg of stream('/api/scan', body)) {
       if (msg.type === 'progress' && msg.found) $('#scanText').textContent = `Found ${plural(msg.found, 'photo or video', 'photos and videos')} so far…`;
@@ -216,8 +229,9 @@ async function scan(body) {
   } catch (err) {
     state.stage = 'setup';
     showSetupPanel('setupForm');
-    $('#phoneText').textContent = err.message;
-    watchPhone();
+    $('#scanError').textContent = err.message;
+    $('#scanError').hidden = false;
+    watchDevices();
   }
 }
 
@@ -226,7 +240,7 @@ function showFound(summary, mode) {
   showSetupPanel('foundPanel');
   state.scanMode = mode;
   const folderName = mode === 'folder' ? (summary.where || '').split('\\').filter(Boolean).pop() : '';
-  $('#foundWhere').textContent = mode === 'folder' ? `Found in “${folderName}”` : `Found on your ${state.phone?.name ?? 'phone'}`;
+  $('#foundWhere').textContent = mode === 'folder' ? `Found in “${folderName}”` : `Found on your ${shortName(summary.where || 'phone')}`;
   $('#foundWhere').title = summary.where || '';
   $('#foundPhotos').textContent = summary.photos.toLocaleString();
   $('#foundVideos').textContent = summary.videos.toLocaleString();
@@ -247,7 +261,7 @@ function showFound(summary, mode) {
   $('#dayBars').hidden = !days.length;
   $('#copyBtn').disabled = !summary.total;
   $('#copyBtn').textContent = summary.total ? `Copy ${plural(summary.total, 'file')} to my laptop & sort` : 'Nothing to copy';
-  watchPhone();
+  watchDevices();
 }
 
 async function copyAndSort() {
@@ -324,7 +338,7 @@ function renderFolder(path) {
 
 function renderStats() {
   const counted = state.items.filter((it) => it.folder);
-  $('#statPhotos').textContent = counted.filter((it) => it.file.kind === 'photo').length.toLocaleString();
+  $('#statPhotos').textContent = counted.filter((it) => it.file.kind !== 'video').length.toLocaleString();
   $('#statVideos').textContent = counted.filter((it) => it.file.kind === 'video').length.toLocaleString();
   $('#statFolders').textContent = new Set(counted.map((it) => it.folder)).size;
 }
@@ -351,7 +365,7 @@ function addTile(src, fileId) {
 
 // "A total mess": small real thumbnails of a sample of the trip, made while the AI loads.
 async function buildPile(files) {
-  const photos = files.filter((f) => f.kind === 'photo' && !['.heic', '.heif', '.dng'].includes(f.ext));
+  const photos = files.filter((f) => f.kind === 'photo' && !['.heic', '.heif'].includes(f.ext));
   const step = Math.max(1, photos.length / PILE_SIZE);
   for (let i = 0; i < photos.length && state.pileTiles.size < PILE_SIZE; i += step) {
     const file = photos[Math.floor(i)];
@@ -529,21 +543,23 @@ function toCanvasAndThumb(bitmap) {
   return { canvas, thumb: thumb.toDataURL('image/jpeg', 0.72) };
 }
 
-const BROKEN_THUMB = (() => {
+function labelThumb(text) {
   const c = document.createElement('canvas');
   c.width = c.height = THUMB;
   const g = c.getContext('2d');
   g.fillStyle = '#dce6f3'; g.fillRect(0, 0, THUMB, THUMB);
-  g.fillStyle = '#74819a'; g.font = '600 18px sans-serif'; g.textAlign = 'center'; g.fillText('?', THUMB / 2, THUMB / 2 + 6);
+  g.fillStyle = '#74819a'; g.font = '600 22px sans-serif'; g.textAlign = 'center'; g.fillText(text, THUMB / 2, THUMB / 2 + 8);
   return c.toDataURL();
-})();
+}
+const BROKEN_THUMB = labelThumb('?');
+const RAW_THUMB = labelThumb('RAW');
 
 // ------------------------------------------------------------------ 4. sorting one file
 
 async function sortFile(ai, categoryVectors, file, seenHashes, recent) {
   const { settings } = state;
   const url = `/media/${file.id}`;
-  const item = { file, thumb: BROKEN_THUMB, folder: null, embedding: null };
+  const item = { file, thumb: BROKEN_THUMB, folder: null, embedding: null, twins: [] };
   try {
     let bitmap;
     if (file.kind === 'video') {
@@ -615,16 +631,31 @@ async function startSorting() {
   const seenHashes = new Set();
   const recent = [];
   const started = performance.now();
-  for (const file of session.files) {
+  const raws = session.files.filter((f) => f.kind === 'raw');
+  for (const file of session.files.filter((f) => f.kind !== 'raw')) {
     const item = await sortFile(ai, categoryVectors, file, seenHashes, recent);
     state.items.push(item);
     state.sorted++;
     fly(item, takeFromPile(file.id));
     renderStats();
     const perFile = (performance.now() - started) / 1000 / state.sorted;
-    setBar(state.sorted / session.files.length);
-    setStatus(`Sorting ${state.sorted.toLocaleString()} of ${session.files.length.toLocaleString()} · ${formatDuration(perFile * (session.files.length - state.sorted))} left<br><span class="muted small">AI on the ${ai.device === 'webgpu' ? 'graphics chip' : 'processor'} · photos stay on this laptop</span>`);
+    setBar(state.sorted / (session.files.length - raws.length));
+    setStatus(`Sorting ${state.sorted.toLocaleString()} of ${session.files.length.toLocaleString()} · ${formatDuration(perFile * (session.files.length - raws.length - state.sorted))} left<br><span class="muted small">AI on the ${ai.device === 'webgpu' ? 'graphics chip' : 'processor'} · photos stay on this laptop</span>`);
   }
+
+  // Camera RAW files (browsers can't open them) follow the JPG with the same name: IMG_0042.CR2 goes
+  // wherever IMG_0042.JPG went. A RAW without a JPG twin goes to Other.
+  const twinKey = (file) => file.rel.replace(/\.[^./]+$/, '').toLowerCase();
+  const byName = new Map(state.items.map((it) => [twinKey(it.file), it]));
+  for (const file of raws) {
+    const twin = byName.get(twinKey(file));
+    const item = { file, thumb: twin?.thumb ?? RAW_THUMB, folder: twin?.folder ?? folderFor('photo', settings.otherFolder), embedding: null, twins: [] };
+    twin?.twins.push(item);
+    state.items.push(item);
+    state.sorted++;
+    fly(item, takeFromPile(file.id));
+  }
+  renderStats();
 
   state.finished = true;
   state.stage = 'review';
@@ -648,11 +679,12 @@ function openFolder(path) {
   grid.innerHTML = members.length ? '' : '<p class="empty">Nothing here.</p>';
   for (const item of members) {
     const fig = document.createElement('figure');
-    const options = folderOptions(item.file.kind)
+    const options = folderOptions(item.file.kind === 'video' ? 'video' : 'photo')
       .map(([p, f]) => `<option value="${escapeHtml(p)}"${p === path ? ' selected' : ''}>${escapeHtml(f.label)}</option>`).join('');
     fig.innerHTML = `<img src="${item.thumb}" alt=""><figcaption title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</figcaption><select aria-label="Folder for ${escapeHtml(item.file.name)}" ${state.applied ? 'disabled' : ''}>${options}</select>`;
     fig.querySelector('select').addEventListener('change', (e) => {
-      item.folder = e.target.value;
+      // A photo's RAW twin moves with it.
+      for (const moved of [item, ...item.twins]) moved.folder = e.target.value;
       fig.style.opacity = 0.35;
       renderFolder(path);
       renderFolder(item.folder);
@@ -677,8 +709,8 @@ function reportHtml(css, result) {
     return `<a class="card${trash ? ' trash' : ''}" href="${href}"><div class="card-head">${trash ? TRASH_ICON : FOLDER_ICON}<span class="name">${escapeHtml(f.label)}</span><span class="count">${members.length}</span></div><div class="strip">${thumbs}${more}</div></a>`;
   };
   const column = (kind) => [...state.folders.entries()].filter(([, f]) => f.kind === kind).map(([p, f]) => card(p, f)).join('');
-  const photos = state.items.filter((it) => it.file.kind === 'photo').length;
-  const videos = state.items.length - photos;
+  const videos = state.items.filter((it) => it.file.kind === 'video').length;
+  const photos = state.items.length - videos;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(session.trip)} - sorted photos</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -713,7 +745,7 @@ async function applySorting() {
     setStatus(`✅ ${plural(result.moved, 'file')} sorted into ${plural(result.folders, 'folder')}.`);
     showDonePanels(result);
   } catch (err) {
-    setStatus(`Something went wrong while moving files: ${escapeHtml(err.message)}<br>Nothing on your phone was touched.`);
+    setStatus(`Something went wrong while moving files: ${escapeHtml(err.message)}<br>Nothing on your phone or card was touched.`);
     button.disabled = false;
   }
 }
@@ -729,21 +761,27 @@ function showDonePanels(result) {
   actions.appendChild(done);
   $('#openBtn').addEventListener('click', () => postJson('/api/open-folder'));
 
-  const phone = state.session.phoneName ?? 'phone';
-  if (state.session.fromPhone && result.deletable > 0) {
+  const { canFreeUp, sourceKind } = state.session;
+  const source = shortName(state.session.sourceName ?? 'phone');
+  const itsName = sourceKind === 'phone' ? 'phone' : sourceKind === 'drive' && /^usb/i.test(source) ? 'USB stick' : 'card';
+  if (canFreeUp && result.deletable > 0) {
     const free = document.createElement('div');
     free.className = 'panel';
     free.id = 'freePanel';
-    free.innerHTML = `<h3>Free up space on your ${escapeHtml(phone.replace(/^Apple /, ''))}?</h3>
+    free.innerHTML = `<h3>Free up space on your ${escapeHtml(source)}?</h3>
       <p>All ${plural(result.deletable, 'file')} were checked: each one is on your laptop with exactly the same size.</p>
-      <div class="row"><button class="danger" id="deleteBtn">Delete them from my phone</button><button class="ghost-btn" id="keepBtn">Keep them</button></div>`;
+      <div class="row"><button class="danger" id="deleteBtn">Delete them from my ${itsName}</button><button class="ghost-btn" id="keepBtn">Keep them</button></div>`;
     actions.appendChild(free);
     $('#deleteBtn').addEventListener('click', () => {
       $('#deleteCount').textContent = result.deletable.toLocaleString();
-      $('#deletePhone').textContent = phone.replace(/^Apple /, '');
+      $('#deletePhone').textContent = source;
+      $('#deleteNote').innerHTML = sourceKind === 'phone'
+        ? 'Deleting over the cable is <b>permanent on the phone</b> — they skip “Recently Deleted”.'
+        : `Deleting is <b>permanent</b> — a ${itsName} has no Recycle Bin.`;
+      $('#deleteConfirm').textContent = `Yes, delete from ${itsName}`;
       $('#deleteDialog').showModal();
     });
-    $('#keepBtn').addEventListener('click', () => { free.innerHTML = '<p>OK — nothing was deleted from your phone.</p>'; });
+    $('#keepBtn').addEventListener('click', () => { free.innerHTML = `<p>OK — nothing was deleted from your ${itsName}.</p>`; });
   }
 
   const finish = document.createElement('button');
@@ -756,19 +794,24 @@ function showDonePanels(result) {
 async function deleteFromPhone() {
   $('#deleteDialog').close();
   const panel = $('#freePanel');
-  panel.innerHTML = '<h3>Deleting from your phone…</h3><p id="deleteProgress">Starting…</p><div class="progress"><div class="bar" id="deleteBar"></div></div>';
+  const source = shortName(state.session.sourceName ?? 'phone');
+  const isPhone = state.session.sourceKind === 'phone';
+  panel.innerHTML = `<h3>Deleting from your ${escapeHtml(source)}…</h3><p id="deleteProgress">Starting…</p><div class="progress"><div class="bar" id="deleteBar"></div></div>`;
   try {
     for await (const msg of stream('/api/delete')) {
       if (msg.type === 'progress') {
         $('#deleteProgress').textContent = `Deleted ${msg.done.toLocaleString()} of ${msg.total.toLocaleString()}…`;
         $('#deleteBar').style.width = `${Math.round((100 * msg.done) / msg.total)}%`;
       }
-      if (msg.type === 'checking') $('#deleteProgress').textContent = 'Checking the phone…';
+      if (msg.type === 'checking') $('#deleteProgress').textContent = 'Checking…';
       if (msg.type === 'done') {
         const all = msg.deleted === msg.total;
-        panel.innerHTML = `<h3>${all ? '✨ Space freed up' : 'Some photos stayed on the phone'}</h3>
-          <p>Deleted ${msg.deleted.toLocaleString()} of ${msg.total.toLocaleString()} files from your phone.</p>
-          ${all ? '' : '<p class="muted">iPhones with iCloud Photos switched on don’t allow deleting over the cable. Delete them in the Photos app instead — they’re all safe on your laptop.</p>'}`;
+        const why = isPhone
+          ? 'iPhones with iCloud Photos switched on don’t allow deleting over the cable. Delete them in the Photos app instead'
+          : 'The card may be write-protected (check the little lock switch on its side)';
+        panel.innerHTML = `<h3>${all ? '✨ Space freed up' : `Some files stayed on the ${isPhone ? 'phone' : 'card'}`}</h3>
+          <p>Deleted ${msg.deleted.toLocaleString()} of ${msg.total.toLocaleString()} files from your ${escapeHtml(source)}.</p>
+          ${all ? '' : `<p class="muted">${why} — they’re all safe on your laptop.</p>`}`;
       }
     }
   } catch (err) {
@@ -792,8 +835,15 @@ for (const id of ['fromDate', 'untilDate']) {
   });
 }
 $('#findBtn').addEventListener('click', () => scan({
-  mode: 'phone', from: $('#fromDate').value, until: $('#untilDate').value, skipImported: $('#skipImported').checked,
+  mode: 'device', device: state.deviceId,
+  from: $('#fromDate').value, until: $('#untilDate').value, skipImported: $('#skipImported').checked,
 }));
+$('#devices').addEventListener('click', (e) => {
+  const chip = e.target.closest('button[data-id]');
+  if (!chip || chip.dataset.state !== 'ready') return;
+  state.deviceId = chip.dataset.id;
+  updateDevices(state.devices);
+});
 $('#folderBtn').addEventListener('click', async () => {
   const button = $('#folderBtn');
   const label = button.textContent;
@@ -842,9 +892,9 @@ async function main() {
   renderFolderChips();
   const status = await getJson('/api/status');
   if (status.hasSession && !status.applied) { await startSorting(); return; }
-  updatePhone(status.phone);
+  updateDevices(status.devices);
   $('#saveNote').textContent = `Saved to ${status.tripsRoot} — your photos never leave this laptop.`;
-  watchPhone();
+  watchDevices();
 }
 
 main().catch((err) => {
