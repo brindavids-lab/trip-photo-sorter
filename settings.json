@@ -1,0 +1,59 @@
+{
+  "tripsFolder": "",
+  "aiModel": "Xenova/clip-vit-base-patch32",
+  "minConfidence": 0.2,
+  "duplicateSimilarity": 0.97,
+  "pngIsScreenshot": true,
+  "otherFolder": "Other",
+  "duplicatesFolder": "Duplicates - to trash",
+  "categories": [
+    {
+      "folder": "Me & selfies",
+      "prompts": ["a selfie", "a close-up selfie of one person", "a portrait photo of one person", "a photo of a single person posing for the camera"]
+    },
+    {
+      "folder": "Group photos",
+      "prompts": ["a group photo of friends", "several people posing together", "a group of people smiling at the camera", "a family photo", "two people posing together"]
+    },
+    {
+      "folder": "Outfits",
+      "prompts": ["a full-body mirror selfie showing an outfit", "a fashion photo of a person's outfit", "clothes and shoes"]
+    },
+    {
+      "folder": "Food & cafés",
+      "prompts": ["a photo of food on a plate", "a cup of coffee in a cafe", "a restaurant meal", "drinks and cocktails on a table", "desserts and pastries"]
+    },
+    {
+      "folder": "Nature",
+      "prompts": ["a landscape photo of mountains", "a beach and the ocean", "a tropical beach with trees", "a forest", "a sunset sky", "a lake or a river in nature", "flowers and plants"]
+    },
+    {
+      "folder": "Travel & vibe",
+      "prompts": ["a famous landmark", "a street in a city", "old buildings and architecture", "a view from an airplane window", "a city skyline", "a train station or an airport"]
+    },
+    {
+      "folder": "Aesthetic spaces",
+      "prompts": ["a cozy hotel room interior", "a beautiful interior design", "a stylish restaurant interior", "a swimming pool at a resort"]
+    },
+    {
+      "folder": "Sport & wellness",
+      "prompts": ["a person playing a sport", "skiing or snowboarding", "a ball game like football, baseball or tennis", "a gym workout", "yoga", "hiking on a trail", "surfing or swimming", "cycling", "a spa"]
+    },
+    {
+      "folder": "Music & hobby",
+      "prompts": ["a concert", "a musician playing an instrument", "a festival crowd", "art in a museum", "a painting"]
+    },
+    {
+      "folder": "Animals",
+      "prompts": ["a photo of an animal", "a photo of a dog", "a photo of a cat", "wildlife", "birds", "a horse or farm animals"]
+    },
+    {
+      "folder": "Text & documents",
+      "prompts": ["a photo of a document", "a ticket or a receipt", "a sign with text", "a restaurant menu", "a boarding pass"]
+    },
+    {
+      "folder": "Screenshots",
+      "prompts": ["a screenshot of a phone screen", "a screenshot of a chat app", "a screenshot of a map app"]
+    }
+  ]
+}

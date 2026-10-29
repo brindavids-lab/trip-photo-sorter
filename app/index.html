@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trip Photo Sorter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="avatar" aria-hidden="true">✿</div>
+      <div>
+        <div class="eyebrow">Trip Photo Sorter · <span class="muted">AI runs on this laptop</span></div>
+        <h1>Sorting my <em id="tripName">trip</em> photos</h1>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="label">Total files</span><span class="value" id="statTotal">–</span></div>
+      <div class="stat"><span class="label"><i class="dot"></i>Photos</span><span class="value" id="statPhotos">0</span></div>
+      <div class="stat"><span class="label"><i class="dot video"></i>Videos</span><span class="value" id="statVideos">0</span></div>
+      <div class="stat"><span class="label">Folders created</span><span class="value" id="statFolders">0</span></div>
+    </div>
+  </header>
+
+  <main class="board">
+    <section class="column" aria-labelledby="photosHeading">
+      <h2 id="photosHeading">Photos</h2>
+      <div class="cards" id="photoCards"></div>
+    </section>
+
+    <section class="center">
+      <div class="pile" id="pile" aria-hidden="true"></div>
+      <p class="pile-caption" id="pileCaption">a total mess</p>
+      <div class="cards" id="specialCards"></div>
+      <p class="status" id="status" role="status">Getting ready…</p>
+      <div class="progress"><div class="bar" id="bar"></div></div>
+      <button class="primary" id="applyBtn" disabled>Create folders &amp; move files</button>
+      <p class="hint" id="hint">Tip: when sorting finishes, click any folder to check it and move photos the AI got wrong.</p>
+    </section>
+
+    <section class="column" id="videoColumn" aria-labelledby="videosHeading">
+      <h2 id="videosHeading">Videos</h2>
+      <div class="cards" id="videoCards"><p class="empty">Videos will appear here.</p></div>
+    </section>
+  </main>
+
+  <dialog id="folderDialog">
+    <div class="dialog-head">
+      <h3 id="dialogTitle">Folder</h3>
+      <button class="ghost" id="dialogClose" aria-label="Close">✕</button>
+    </div>
+    <p class="hint">Wrong folder? Pick the right one under the photo.</p>
+    <div class="grid" id="dialogGrid"></div>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
