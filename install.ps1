@@ -5,7 +5,7 @@
 
 .EXAMPLE
   # From anywhere (downloads the latest version from GitHub):
-  irm https://raw.githubusercontent.com/OWNER/trip-photo-sorter/main/install.ps1 | iex
+  irm https://raw.githubusercontent.com/brindavids-lab/trip-photo-sorter/main/install.ps1 | iex
 
 .EXAMPLE
   .\install.ps1              # from a downloaded or cloned copy
@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Repo = 'OWNER/trip-photo-sorter'
+$Repo = 'brindavids-lab/trip-photo-sorter'
 $ShortcutName = 'Sort My Trip.lnk'
 $AppFiles = 'Sort My Trip.bat', 'SortTrip.ps1', 'settings.json', 'app', 'lib', 'install.ps1', 'README.md', 'LICENSE'
 $Utf8 = New-Object System.Text.UTF8Encoding $false

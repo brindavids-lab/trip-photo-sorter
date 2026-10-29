@@ -19,7 +19,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 Otherwise this downloads and installs the latest version:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/OWNER/trip-photo-sorter/main/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/brindavids-lab/trip-photo-sorter/main/install.ps1 | iex"
 ```
 
 It copies the app to `%LOCALAPPDATA%\TripPhotoSorter` and adds a **Sort My Trip** shortcut to the

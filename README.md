@@ -18,7 +18,7 @@ Free for anyone. Pick one way:
 **A. Let Claude do it.** Open the Claude desktop app, go to the **Code** tab (or use Claude Code),
 and paste:
 
-> Install and set up this for me: https://github.com/OWNER/trip-photo-sorter
+> Install and set up this for me: https://github.com/brindavids-lab/trip-photo-sorter
 
 Claude reads [CLAUDE.md](CLAUDE.md), installs it and puts a **Sort My Trip** shortcut on your
 Desktop. (A normal Claude chat on the website can't install things on your computer, so use the
@@ -27,7 +27,7 @@ Code tab.)
 **B. One line in PowerShell.** Press Start, type *PowerShell*, open it and paste:
 
 ```powershell
-irm https://raw.githubusercontent.com/OWNER/trip-photo-sorter/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/brindavids-lab/trip-photo-sorter/main/install.ps1 | iex
 ```
 
 **C. By hand.** Green **Code** button → **Download ZIP**, unzip it, then double-click
