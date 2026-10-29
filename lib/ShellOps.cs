@@ -55,27 +55,51 @@ namespace TripSorter
             [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
             [MarshalAs(UnmanagedType.Interface, IidParameterIndex = 2)] out IShellItem ppv);
 
-        static IShellItem Item(string parsingName)
+        [DllImport("shell32.dll", PreserveSig = false)]
+        static extern void SHGetIDListFromObject([MarshalAs(UnmanagedType.IUnknown)] object punk, out IntPtr ppidl);
+
+        [DllImport("shell32.dll", PreserveSig = false)]
+        static extern void SHCreateItemFromIDList(IntPtr pidl,
+            [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
+            [MarshalAs(UnmanagedType.Interface, IidParameterIndex = 1)] out IShellItem ppv);
+
+        // A normal folder on the laptop.
+        static IShellItem Item(string path)
         {
             IShellItem item;
-            SHCreateItemFromParsingName(parsingName, IntPtr.Zero, IID_IShellItem, out item);
+            SHCreateItemFromParsingName(path, IntPtr.Zero, IID_IShellItem, out item);
             return item;
         }
 
-        static IFileOperation NewOperation(uint flags, string message)
+        // A Shell.Application FolderItem, e.g. a photo on the phone. Phone items can't be
+        // re-opened from their FolderItem.Path text, so go through the item's ID list instead.
+        static IShellItem Item(object folderItem)
+        {
+            IntPtr pidl;
+            SHGetIDListFromObject(folderItem, out pidl);
+            try
+            {
+                IShellItem item;
+                SHCreateItemFromIDList(pidl, IID_IShellItem, out item);
+                return item;
+            }
+            finally { Marshal.FreeCoTaskMem(pidl); }
+        }
+
+        // (IFileOperation.SetProgressMessage is documented as not implemented, so no custom title.)
+        static IFileOperation NewOperation(uint flags)
         {
             var op = (IFileOperation)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_FileOperation));
             op.SetOperationFlags(flags);
-            if (!string.IsNullOrEmpty(message)) op.SetProgressMessage(message);
             return op;
         }
 
-        // Copies each source (a shell parsing name, e.g. FolderItem.Path of a phone file)
-        // into the matching destination folder (a normal path that already exists).
+        // Copies each source (a Shell.Application FolderItem on the phone) into the matching
+        // destination folder (a normal path that already exists).
         // Shows the Windows progress dialog. Returns false if the user cancelled.
-        public static bool Copy(string[] sources, string[] destFolders)
+        public static bool Copy(object[] sources, string[] destFolders)
         {
-            var op = NewOperation(FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR, "Copying trip photos from your phone");
+            var op = NewOperation(FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR);
             try
             {
                 for (int i = 0; i < sources.Length; i++)
@@ -86,13 +110,13 @@ namespace TripSorter
             finally { Marshal.ReleaseComObject(op); }
         }
 
-        // Permanently deletes the given phone files (phones have no Recycle Bin).
-        public static bool Delete(string[] items)
+        // Permanently deletes the given phone files (FolderItems; phones have no Recycle Bin).
+        public static bool Delete(object[] items)
         {
-            var op = NewOperation(FOF_NOCONFIRMATION, "Deleting sorted photos from your phone");
+            var op = NewOperation(FOF_NOCONFIRMATION);
             try
             {
-                foreach (var path in items) op.DeleteItem(Item(path), IntPtr.Zero);
+                foreach (var folderItem in items) op.DeleteItem(Item(folderItem), IntPtr.Zero);
                 op.PerformOperations();
                 return !op.GetAnyOperationsAborted();
             }

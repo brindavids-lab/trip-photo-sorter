@@ -54,12 +54,17 @@ function Get-ShellFileName($Item) {
     if ($name) { $name } else { $Item.Name }
 }
 
-function Find-DcimFolder($Folder, [int]$Depth) {
+$MonthFolder = '^(\d{4})(0[1-9]|1[0-2])_'   # recent iPhones: Internal Storage\202509_a\IMG_4685.JPG
+
+# Returns the folder holding the camera roll: DCIM (Android, older iPhones), or the
+# storage folder itself when it contains iPhone month folders.
+function Find-PhotoFolder($Folder, [int]$Depth) {
     foreach ($item in $Folder.Items()) {
         if (-not $item.IsFolder) { continue }
         if ($item.Name -eq 'DCIM') { return $item.GetFolder }
+        if ($item.Name -match $MonthFolder -or $item.Name -match '^\d{3}APPLE$') { return $Folder }
         if ($Depth -lt 1) {
-            $found = Find-DcimFolder $item.GetFolder ($Depth + 1)
+            $found = Find-PhotoFolder $item.GetFolder ($Depth + 1)
             if ($found) { return $found }
         }
     }
@@ -70,23 +75,37 @@ function Find-Phones {
     $shell = New-Object -ComObject Shell.Application
     foreach ($device in $shell.Namespace(17).Items()) {   # 17 = "This PC"
         if ($device.IsFileSystem -or -not $device.IsFolder) { continue }   # skip C:, D:, ...
-        $dcim = $null
-        try { $dcim = Find-DcimFolder $device.GetFolder 0 } catch {}
-        # A locked or not-yet-trusted phone shows up with empty storage, so Dcim stays $null.
-        [pscustomobject]@{ Name = $device.Name; Dcim = $dcim }
+        $photos = $null
+        try { $photos = Find-PhotoFolder $device.GetFolder 0 } catch {}
+        # A locked or not-yet-trusted phone shows up with empty storage, so Photos stays $null.
+        [pscustomobject]@{ Name = $device.Name; Photos = $photos }
     }
 }
 
-function Get-PhoneMedia($Folder, [string]$Rel) {
+# Lists photos and videos. With trip dates, iPhone month folders outside them are skipped,
+# which saves minutes on a phone holding years of photos.
+function Get-PhoneMedia($Folder, [string]$Rel, $From = $null, $Until = $null) {
     foreach ($item in $Folder.Items()) {
-        if ($item.IsFolder) { Get-PhoneMedia $item.GetFolder (Join-Rel $Rel $item.Name); continue }
+        if ($item.IsFolder) {
+            if ($item.Name -match $MonthFolder) {
+                $monthStart = New-Object DateTime ([int]$Matches[1]), ([int]$Matches[2]), 1
+                if (($From -and $monthStart.AddMonths(1) -le $From.Date) -or ($Until -and $monthStart -gt $Until.Date)) { continue }
+            }
+            Get-PhoneMedia $item.GetFolder (Join-Rel $Rel $item.Name) $From $Until
+            continue
+        }
         $name = Get-ShellFileName $item
         if ($MediaExt -notcontains [IO.Path]::GetExtension($name).ToLower()) { continue }
         $size = 0L
         try { $size = [int64]$item.ExtendedProperty('System.Size') } catch {}
-        $date = $item.ModifyDate
+        # iPhones leave FolderItem.ModifyDate empty; System.DateModified (UTC) holds the capture time.
+        $date = $null
+        try { $date = $item.ExtendedProperty('System.DateModified') } catch {}
+        if ($date -is [datetime]) { $date = [datetime]::SpecifyKind($date, 'Utc').ToLocalTime() } else { $date = $item.ModifyDate }
         if ($date -and $date.Year -lt 1980) { $date = $null }
-        [pscustomobject]@{ Name = $name; Folder = $Rel; Rel = (Join-Rel $Rel $name); Path = $item.Path; Size = $size; Date = $date; Item = $item }
+        $script:Listed++
+        if ($script:Listed % 25 -eq 0) { Write-Progress -Activity 'Reading the photo list from the phone' -Status "$($script:Listed) files so far ($Rel)" }
+        [pscustomobject]@{ Name = $name; Folder = $Rel; Rel = (Join-Rel $Rel $name); Size = $size; Date = $date; Item = $item }
     }
 }
 
@@ -104,7 +123,7 @@ function Select-Phone {
     while ($true) {
         Say "Looking for your phone..."
         $devices = @(Find-Phones)
-        $phones = @($devices | Where-Object { $_.Dcim })
+        $phones = @($devices | Where-Object { $_.Photos })
         if ($phones.Count -eq 1) { return $phones[0] }
         if ($phones.Count -gt 1) {
             for ($i = 0; $i -lt $phones.Count; $i++) { Say "  [$($i + 1)] $($phones[$i].Name)" White }
@@ -126,12 +145,12 @@ function Select-Phone {
 }
 
 function Copy-FromPhone($Items, [string]$Incoming) {
-    $sources = New-Object System.Collections.Generic.List[string]
+    $sources = New-Object System.Collections.Generic.List[object]
     $dests = New-Object System.Collections.Generic.List[string]
     foreach ($m in $Items) {
         $dest = if ($m.Folder) { Join-Path $Incoming $m.Folder } else { $Incoming }
         [void][IO.Directory]::CreateDirectory($dest)
-        $sources.Add($m.Path); $dests.Add($dest)
+        $sources.Add($m.Item.psobject.BaseObject); $dests.Add($dest)
     }
     try {
         [void][TripSorter.ShellOps]::Copy($sources.ToArray(), $dests.ToArray())
@@ -315,20 +334,22 @@ if (-not $Source) {
 }
 
 if ($Phone) {
-    Say "Found: $($Phone.Name). Reading the photo list (this can take a minute)..." Green
-    $all = @(Get-PhoneMedia $Phone.Dcim '')
+    Say "Found: $($Phone.Name)." Green
+    Say "Which dates was the trip? Press Enter on both to take everything not imported before."
+    $from = Read-Date "  First day of the trip (e.g. 2026-10-14)"
+    $until = Read-Date "  Last day of the trip  (e.g. 2026-10-21)"
+    Say "Reading the photo list from the phone (this can take a minute)..."
+    $all = @(Get-PhoneMedia $Phone.Photos '' $from $until)
+    Write-Progress -Activity 'Reading the photo list from the phone' -Completed
     $ledgerPath = Join-Path $TripsRoot '.imported-from-phone.txt'
     $ledger = @{}
     if (Test-Path -LiteralPath $ledgerPath) { foreach ($line in [IO.File]::ReadAllLines($ledgerPath)) { $ledger[$line] = $true } }
     $keyOf = { param($m) "$($Phone.Name)|$($m.Rel)|$(if ($m.Date) { $m.Date.ToString('s') })" }
 
-    Say "The phone has $($all.Count) photos and videos."
-    Say "Which dates was the trip? Press Enter on both to take everything not imported before."
-    $from = Read-Date "  First day of the trip (e.g. 2026-10-14)"
-    $until = Read-Date "  Last day of the trip  (e.g. 2026-10-21)"
     $PhoneItems = @($all | Where-Object {
         if ($from -or $until) {
-            $_.Date -and (-not $from -or $_.Date.Date -ge $from.Date) -and (-not $until -or $_.Date.Date -le $until.Date)
+            # Files without a date are kept rather than silently left behind.
+            -not $_.Date -or ((-not $from -or $_.Date.Date -ge $from.Date) -and (-not $until -or $_.Date.Date -le $until.Date))
         } else {
             -not $ledger[(& $keyOf $_)]
         }
@@ -434,12 +455,14 @@ $answer = Read-Host "Type YES to delete them from the phone, or press Enter to k
 if ($answer -ne 'YES' -and $answer -ne 'yes') { Say "OK - nothing was deleted from the phone."; return }
 
 try {
-    [void][TripSorter.ShellOps]::Delete([string[]]@($safe | ForEach-Object { $_.Path }))
+    [void][TripSorter.ShellOps]::Delete([object[]]@($safe | ForEach-Object { $_.Item.psobject.BaseObject }))
 } catch {
     Say "The phone refused some deletions: $($_.Exception.Message)" Yellow
 }
+Say "Checking the phone..."
 $stillThere = @{}
-foreach ($m in @(Get-PhoneMedia $Phone.Dcim '')) { $stillThere[$m.Rel] = $true }
+foreach ($m in @(Get-PhoneMedia $Phone.Photos '' $from $until)) { $stillThere[$m.Rel] = $true }
+Write-Progress -Activity 'Reading the photo list from the phone' -Completed
 $deleted = @($safe | Where-Object { -not $stillThere[$_.Rel] }).Count
 Say "Deleted $deleted of $($safe.Count) files from the phone." Green
 if ($deleted -lt $safe.Count) {
