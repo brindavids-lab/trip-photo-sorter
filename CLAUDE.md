@@ -16,11 +16,17 @@ Read `install.ps1` first, then run it. If you already cloned or downloaded the r
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Otherwise this downloads and installs the latest version:
+Otherwise download the installer to a file, read it, then run it with `-File`. It notices it has no
+app files next to it and downloads the latest version from GitHub:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/brindavids-lab/trip-photo-sorter/main/install.ps1 | iex"
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/brindavids-lab/trip-photo-sorter/main/install.ps1 -OutFile "$env:TEMP\trip-photo-sorter-install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\trip-photo-sorter-install.ps1"
 ```
+
+(From Git Bash: `curl -fsSL <same URL> -o "$TEMP/trip-photo-sorter-install.ps1"` then the same
+`powershell ... -File` line.) Don't wrap `irm ... | iex` inside `powershell -Command "..."`: nested
+quoting breaks it. That one-liner is only for people pasting it straight into a PowerShell window.
 
 It copies the app to `%LOCALAPPDATA%\TripPhotoSorter` and adds a **Sort My Trip** shortcut to the
 Desktop and Start menu. Running it again updates the app and keeps the person's `settings.json`.
