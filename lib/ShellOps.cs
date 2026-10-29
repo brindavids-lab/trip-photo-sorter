@@ -1,6 +1,7 @@
 // Copies and deletes files on a phone (MTP / "Portable Device") through the
 // Windows Shell's IFileOperation, the same engine File Explorer uses.
 // Phones are not normal drives, so System.IO cannot reach them.
+// Also: the folder picker used by "sort a folder that's already on this laptop".
 using System;
 using System.Runtime.InteropServices;
 
@@ -124,6 +125,83 @@ namespace TripSorter
                 return !op.GetAnyOperationsAborted();
             }
             finally { Marshal.ReleaseComObject(op); }
+        }
+    }
+
+    // The modern Explorer-style "choose a folder" window (the one "Save as" uses).
+    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IFileOpenDialog
+    {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+        void SetFileTypeIndex(uint iFileType);
+        void GetFileTypeIndex(out uint piFileType);
+        void Advise(IntPtr pfde, out uint pdwCookie);
+        void Unadvise(uint dwCookie);
+        void SetOptions(uint fos);
+        void GetOptions(out uint pfos);
+        void SetDefaultFolder(IShellItem psi);
+        void SetFolder(IShellItem psi);
+        void GetFolder(out IShellItem ppsi);
+        void GetCurrentSelection(out IShellItem ppsi);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
+        void GetResult(out IShellItem ppsi);
+        void AddPlace(IShellItem psi, int fdap);
+        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
+        void Close(int hr);
+        void SetClientGuid([In] ref Guid guid);
+        void ClearClientData();
+        void SetFilter(IntPtr pFilter);
+        void GetResults(out IntPtr ppenum);
+        void GetSelectedItems(out IntPtr ppsai);
+    }
+
+    public static class FolderPicker
+    {
+        const uint FOS_PICKFOLDERS = 0x20, FOS_FORCEFILESYSTEM = 0x40, FOS_PATHMUSTEXIST = 0x800;
+        const uint SIGDN_FILESYSPATH = 0x80058000;
+        static readonly Guid CLSID_FileOpenDialog = new Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7");
+
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+        [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
+
+        // Windows stops background programs (like the minimized helper) from jumping in front of the
+        // browser, so borrow the browser's input queue for a moment to bring our window forward.
+        public static void BringToFront(IntPtr window)
+        {
+            uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+            uint ourThread = GetCurrentThreadId();
+            bool attached = foregroundThread != ourThread && AttachThreadInput(ourThread, foregroundThread, true);
+            BringWindowToTop(window);
+            SetForegroundWindow(window);
+            if (attached) AttachThreadInput(ourThread, foregroundThread, false);
+        }
+
+        // Returns the chosen folder's path, or null if the person cancelled.
+        public static string Pick(IntPtr owner, string title)
+        {
+            var dialog = (IFileOpenDialog)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_FileOpenDialog));
+            try
+            {
+                dialog.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+                dialog.SetTitle(title);
+                dialog.SetOkButtonLabel("Sort this folder");
+                if (dialog.Show(owner) != 0) return null;   // cancelled
+                IShellItem item;
+                dialog.GetResult(out item);
+                string path;
+                item.GetDisplayName(SIGDN_FILESYSPATH, out path);
+                return path;
+            }
+            finally { Marshal.ReleaseComObject(dialog); }
         }
     }
 }

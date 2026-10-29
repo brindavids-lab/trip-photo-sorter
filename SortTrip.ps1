@@ -234,12 +234,17 @@ function Get-PhoneStatus {
 }
 
 function Invoke-PickFolder($Ctx) {
-    # The owner form keeps the dialog in front of the browser.
-    $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }
-    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = 'Choose the folder with your trip photos'
-    $path = if ($dialog.ShowDialog($owner) -eq 'OK') { $dialog.SelectedPath } else { $null }
-    $owner.Dispose()
+    # An invisible always-on-top window, brought to the front, owns the picker so it opens on top
+    # of the browser instead of hiding behind it.
+    $owner = New-Object System.Windows.Forms.Form -Property @{
+        TopMost = $true; ShowInTaskbar = $false; FormBorderStyle = 'None'; Opacity = 0
+        StartPosition = 'CenterScreen'; Size = (New-Object System.Drawing.Size 1, 1)
+    }
+    try {
+        $owner.Show()
+        [TripSorter.FolderPicker]::BringToFront($owner.Handle)
+        $path = [TripSorter.FolderPicker]::Pick($owner.Handle, 'Choose the folder with your trip photos')
+    } finally { $owner.Dispose() }
     Send-Json $Ctx @{ path = $path }
 }
 
@@ -285,6 +290,7 @@ function Invoke-Scan($Ctx) {
     $bytes = ($State.Items | Measure-Object -Property Size -Sum).Sum
     Send-Line $res @{
         type = 'done'; total = $State.Items.Count; photos = $State.Items.Count - $videos; videos = $videos
+        where = $(if ($req.mode -eq 'folder') { $State.Source } else { $State.Phone.Name })
         bytes = [int64]$bytes; skipped = $skipped; days = $days
     }
 }

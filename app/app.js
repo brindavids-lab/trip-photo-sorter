@@ -224,12 +224,19 @@ async function scan(body) {
 function showFound(summary, mode) {
   state.stage = 'found';
   showSetupPanel('foundPanel');
-  $('#foundWhere').textContent = mode === 'folder' ? 'Found in that folder' : `Found on your ${state.phone?.name ?? 'phone'}`;
+  state.scanMode = mode;
+  const folderName = mode === 'folder' ? (summary.where || '').split('\\').filter(Boolean).pop() : '';
+  $('#foundWhere').textContent = mode === 'folder' ? `Found in “${folderName}”` : `Found on your ${state.phone?.name ?? 'phone'}`;
+  $('#foundWhere').title = summary.where || '';
   $('#foundPhotos').textContent = summary.photos.toLocaleString();
   $('#foundVideos').textContent = summary.videos.toLocaleString();
   const meta = [formatBytes(summary.bytes || 0)];
   if (summary.skipped) meta.push(`${plural(summary.skipped, 'file')} you already copied are skipped`);
-  $('#foundMeta').textContent = summary.total ? meta.join(' · ') : 'Nothing found for those dates. Try other dates.';
+  const nothing = mode === 'folder'
+    ? `No photos or videos in ${summary.where} or the folders inside it. Try another folder.`
+    : 'Nothing found for those dates. Try other dates.';
+  $('#foundMeta').textContent = summary.total ? meta.join(' · ') : nothing;
+  $('#changeBtn').textContent = mode === 'folder' ? 'Choose another folder' : 'Change dates';
 
   const days = summary.days.length <= 31 ? summary.days : [];
   const max = Math.max(1, ...days.map((d) => d.count));
@@ -788,10 +795,23 @@ $('#findBtn').addEventListener('click', () => scan({
   mode: 'phone', from: $('#fromDate').value, until: $('#untilDate').value, skipImported: $('#skipImported').checked,
 }));
 $('#folderBtn').addEventListener('click', async () => {
-  const { path } = await postJson('/api/pick-folder');
-  if (path) scan({ mode: 'folder', path });
+  const button = $('#folderBtn');
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'A “choose a folder” window has opened — pick your folder there';
+  try {
+    const { path } = await postJson('/api/pick-folder');
+    if (path) scan({ mode: 'folder', path });
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
 });
-$('#changeBtn').addEventListener('click', () => { state.stage = 'setup'; showSetupPanel('setupForm'); });
+$('#changeBtn').addEventListener('click', () => {
+  state.stage = 'setup';
+  showSetupPanel('setupForm');
+  if (state.scanMode === 'folder') $('#folderBtn').click();
+});
 $('#copyBtn').addEventListener('click', copyAndSort);
 $('#applyBtn').addEventListener('click', applySorting);
 $('#dialogClose').addEventListener('click', () => $('#folderDialog').close());

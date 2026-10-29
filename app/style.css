@@ -127,6 +127,7 @@ h1 em { font-family: var(--serif); font-weight: 400; font-size: 1.12em; letter-s
 .primary:disabled { opacity: 0.35; cursor: default; box-shadow: none; }
 .primary.wide { width: 100%; }
 .link { display: block; margin: 12px auto 0; border: 0; background: none; color: var(--accent); font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.link:disabled { color: var(--ink); text-decoration: none; cursor: default; font-weight: 600; }
 .foot { margin: 16px 0 0; text-align: center; border-top: 1px solid var(--line); padding-top: 12px; }
 
 .days { display: flex; align-items: flex-end; gap: 4px; height: 92px; margin: 14px 0 18px; }
